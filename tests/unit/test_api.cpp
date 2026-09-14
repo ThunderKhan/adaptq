@@ -8,7 +8,7 @@
 /* -------------------------------------------------------------------------
  * tests/unit/test_api.cpp
  * C ABI smoke tests — covers every public function in adaptq.h.
- * ----------------------------------------------------------------------- */
+ * ------------------------------------------------------------------------- */
 
 static void fill_vec(float *v, int n, float val) {
     for (int i = 0; i < n; ++i) v[i] = val;
@@ -99,6 +99,47 @@ TEST_CASE("adaptq_create with invalid parameters returns null", "[api][security]
     REQUIRE(std::string(adaptq_last_error()).size() > 0);
 }
 
+TEST_CASE("single-head API rejects null handles and buffers without crashing", "[api][security]") {
+    float k[128] = {}, v[128] = {}, q[128] = {}, out[128] = {};
+
+    REQUIRE(adaptq_compute(nullptr, q, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_compute: null handle") != std::string::npos);
+
+    REQUIRE(adaptq_compute(nullptr, nullptr, nullptr) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_compute: null handle") != std::string::npos);
+
+    adaptq_ctx_t h = adaptq_create(128, 4, 16, 1, 0.f, 0);
+    REQUIRE(h != nullptr);
+
+    adaptq_append(h, nullptr, v, 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_append: null key") != std::string::npos);
+
+    adaptq_append(h, k, nullptr, 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_append: null val") != std::string::npos);
+
+    REQUIRE(adaptq_compute(h, nullptr, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_compute: null query") != std::string::npos);
+
+    REQUIRE(adaptq_compute(h, q, nullptr) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_compute: null out") != std::string::npos);
+
+    REQUIRE(adaptq_compute_batch(h, nullptr, 1, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_compute_batch: null queries") != std::string::npos);
+
+    REQUIRE(adaptq_compute_batch(h, q, 1, nullptr) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_compute_batch: null outs") != std::string::npos);
+
+    REQUIRE(adaptq_compute_batch(h, nullptr, 0, nullptr) == 0);
+
+    adaptq_reset(nullptr);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_reset: null handle") != std::string::npos);
+    REQUIRE(adaptq_kv_bytes(nullptr) == 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_kv_bytes: null handle") != std::string::npos);
+
+    adaptq_destroy(nullptr);
+    adaptq_destroy(h);
+}
+
 /* ---- Multi-head -------------------------------------------------------- */
 
 TEST_CASE("adaptq_mha_create / destroy", "[api][mha]") {
@@ -161,6 +202,52 @@ TEST_CASE("adaptq_mha_append: exact upper bound head_idx sets error", "[api][mha
     float k[64], v[64];
     adaptq_mha_append(mha, 4, k, v, 0); // 4 is out of bounds for size 4
     REQUIRE(std::string(adaptq_last_error()).size() > 0);
+    adaptq_mha_destroy(mha);
+}
+
+TEST_CASE("multi-head API rejects null handles and buffers without crashing", "[api][mha][security]") {
+    float k[64] = {}, v[64] = {}, q[64] = {}, out[64] = {};
+
+    REQUIRE(adaptq_mha_compute(nullptr, 0, q, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_compute: null handle") != std::string::npos);
+
+    adaptq_mha_append(nullptr, 0, k, v, 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_append: null handle") != std::string::npos);
+
+    REQUIRE(adaptq_mha_compute_batch(nullptr, 0, q, 1, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_compute_batch: null handle") != std::string::npos);
+
+    adaptq_mha_reset(nullptr);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_reset: null handle") != std::string::npos);
+
+    REQUIRE(adaptq_mha_total_kv_bytes(nullptr) == 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_total_kv_bytes: null handle") != std::string::npos);
+
+    adaptq_mha_destroy(nullptr);
+
+    adaptq_mha_t mha = adaptq_mha_create(2, 64, 8, 4, 0, 0.f, 0);
+    REQUIRE(mha != nullptr);
+
+    adaptq_mha_append(mha, 0, nullptr, v, 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_append: null key") != std::string::npos);
+
+    adaptq_mha_append(mha, 0, k, nullptr, 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_append: null val") != std::string::npos);
+
+    REQUIRE(adaptq_mha_compute(mha, 0, nullptr, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_compute: null query") != std::string::npos);
+
+    REQUIRE(adaptq_mha_compute(mha, 0, q, nullptr) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_compute: null out") != std::string::npos);
+
+    REQUIRE(adaptq_mha_compute_batch(mha, 0, nullptr, 1, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_compute_batch: null queries") != std::string::npos);
+
+    REQUIRE(adaptq_mha_compute_batch(mha, 0, q, 1, nullptr) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_compute_batch: null outs") != std::string::npos);
+
+    REQUIRE(adaptq_mha_compute_batch(mha, 0, nullptr, 0, nullptr) == 0);
+
     adaptq_mha_destroy(mha);
 }
 
