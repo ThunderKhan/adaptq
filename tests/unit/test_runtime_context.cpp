@@ -22,7 +22,7 @@ static RuntimeContextConfig make_cfg(int n_layers = 1, int n_heads = 2,
     cfg.n_layers  = n_layers;
     cfg.n_heads   = n_heads;
     cfg.dim       = dim;
-    cfg.bits       = bits;
+    cfg.bits      = bits;
     cfg.capacity  = capacity;
     cfg.log_tokens = false;
     return cfg;
