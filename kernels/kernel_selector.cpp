@@ -94,8 +94,10 @@ bool cpu_supports_avx2() {
 }
 
 IKernelBackend *select_kernel_backend() {
-    if (!is_scalar_forced() && cpu_supports_avx2())
-        return create_avx2_backend();
+    if (!is_scalar_forced() && cpu_supports_avx2()) {
+        if (IKernelBackend *backend = create_avx2_backend())
+            return backend;
+    }
     return create_scalar_backend();
 }
 

@@ -3,6 +3,7 @@
 #include "../../include/adaptq/kernel.h"
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 /* -------------------------------------------------------------------------
@@ -39,6 +40,17 @@ TEST_CASE("AVX2 Capability Detection and OS XCR0 State", "[kernel][avx2]") {
     // cpu_supports_avx2 returns a clean boolean without illegal-instruction faults
     INFO("Host CPU + OS AVX2 support status: " << (has_avx2 ? "ENABLED" : "DISABLED/FALLBACK"));
     SUCCEED("cpu_supports_avx2 evaluated cleanly");
+}
+
+TEST_CASE("AVX2 Backend Factory Contract", "[kernel][avx2]") {
+    adaptq::IKernelBackend *backend = adaptq::create_avx2_backend();
+
+    if (backend) {
+        REQUIRE(backend->is_available());
+        REQUIRE(std::string(backend->name()) == "avx2");
+    } else {
+        SUCCEED("AVX2 backend is unavailable in this portable build");
+    }
 }
 
 TEST_CASE("Scalar Backend Factory and Interface Conformance", "[kernel][scalar]") {

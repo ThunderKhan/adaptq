@@ -238,11 +238,18 @@ IKernelBackend *create_avx2_backend() {
     static AVX2KernelBackend instance;
     return &instance;
 }
-} /* namespace adaptq */
+} /* namespace adaptq */
 
 #else  /* !__AVX2__ */
 
-/* When compiled without AVX2 this TU is empty.
- * select_kernel_backend() is defined in kdot_scalar.cpp (scalar fallback). */
+namespace adaptq {
+
+/* Keep the factory symbol available in portable builds. The selector will
+ * fall back to the scalar backend when this TU has no AVX2 implementation. */
+IKernelBackend *create_avx2_backend() {
+    return nullptr;
+}
+
+} /* namespace adaptq */
 
 #endif /* __AVX2__ */
