@@ -79,6 +79,9 @@ def _get_binary() -> str:
 # ---------------------------------------------------------------------------
 
 _VALID_OUTPUT_FORMATS = {"json", "csv", "md", "tex"}
+
+# AQSS V2 header written by replay/session_snapshot.cpp::save().
+# <IIiiiiiiQ = magic, version, 6 signed 32-bit fields, flags.
 _SNAPSHOT_HEADER = struct.Struct("<IIiiiiiiQ")
 _SNAPSHOT_MAGIC = 0x41515353
 _SNAPSHOT_VERSION = 2
@@ -100,12 +103,10 @@ def _load_json(path: str) -> dict:
         raise RuntimeError(f"failed to read JSON replay result from {path}: {exc}") from exc
 
 
-def _run_cli(command: List[str], error_prefix: str, *, summary_json: bool) -> dict:
+def _run_cli(command: List[str], error_prefix: str) -> dict:
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"{error_prefix}:\n{result.stderr}")
-    if not summary_json:
-        raise ValueError("internal error: JSON summary was not requested")
     if not result.stdout.strip():
         raise RuntimeError(f"{error_prefix}: CLI returned no JSON summary")
     try:
@@ -136,7 +137,7 @@ def _run_json_or_file(
             "--output", str(output_path),
             "--summary-json",
         ]
-        return _run_cli(command, error_prefix, summary_json=True)
+        return _run_cli(command, error_prefix)
 
     with tempfile.NamedTemporaryFile(
         suffix=temp_suffix, delete=False
@@ -249,8 +250,8 @@ class ReplayEngine:
     Python interface to the AdapTQ V2 ReplayEngine.
 
     Uses the ``adaptq replay`` and ``adaptq compare`` CLI subcommands
-    internally. All I/O goes through temporary files to avoid piping
-    binary snapshot data.
+    internally. Snapshot files stay on disk; only the structured JSON result
+    is captured through Python when no output_path is requested.
 
     Example
     -------
@@ -406,7 +407,7 @@ def snapshot_info(path: Union[str, Path]) -> dict:
         n_layers,
         n_heads,
         dim,
-        bits,
+        _bits,
         n_tokens,
         n_heads_total,
         flags,
@@ -419,7 +420,7 @@ def snapshot_info(path: Union[str, Path]) -> dict:
             f"snapshot_info: snapshot version {version} > current version "
             f"{_SNAPSHOT_VERSION}"
         )
-    if any(value < 0 for value in (n_layers, n_heads, dim, bits, n_tokens, n_heads_total)):
+    if any(value < 0 for value in (n_layers, n_heads, dim, n_tokens, n_heads_total)):
         raise RuntimeError("snapshot_info: invalid negative value in snapshot header")
 
     return {
