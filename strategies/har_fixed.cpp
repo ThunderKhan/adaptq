@@ -49,13 +49,17 @@ static inline uint8_t bits_to_tag(int bits) {
     }
 }
 
-/* ---- Thread-local scratch (sizes match quantizer.cpp constants) -------- */
+/* ---- Thread-local scratch ------------------------------------------------
+ * Query/accumulator scratch is bounded by the padded head dimension.
+ * Token-dependent scratch grows with the requested cache size instead of
+ * imposing a fixed token-count ceiling.
+ * ------------------------------------------------------------------------- */
 static constexpr int TL_BUF = 1024;
-static thread_local float   tl_q_rot[TL_BUF];
-static thread_local float   tl_v_acc[TL_BUF];
-static thread_local float   tl_logits[65536];
-static thread_local int     tl_slots[65536];
-static thread_local int     tl_ord[65536];
+static thread_local float tl_q_rot[TL_BUF];
+static thread_local float tl_v_acc[TL_BUF];
+static thread_local std::vector<float> tl_logits;
+static thread_local std::vector<int>   tl_slots;
+static thread_local std::vector<int>   tl_ord;
 
 /* ========================================================================
  * HARCompression — ICompression
@@ -186,7 +190,11 @@ public:
         const int bits   = compress_.bits;
         if (!n) { memset(out, 0, dim * sizeof(float)); return 0; }
 
-        assert(padded <= TL_BUF && n <= 65536);
+        assert(padded <= TL_BUF);
+
+        tl_logits.resize(n);
+        tl_slots.resize(n);
+        tl_ord.resize(n);
 
         /* 1. Rotate query (L2-normalise → D-apply → FWHT → scale) */
         float *qr = tl_q_rot;
@@ -236,7 +244,7 @@ public:
         } else {
             /* Sparse-V: accumulate only tokens contributing to v_mass_ of total */
             for (int i = 0; i < n; ++i) tl_ord[i] = i;
-            std::sort(tl_ord, tl_ord + n,
+            std::sort(tl_ord.begin(), tl_ord.end(),
                       [](int a, int b){ return tl_logits[a] > tl_logits[b]; });
             float mass = 0.f;
             for (int i = 0; i < n && mass < v_mass_; ++i) {
@@ -314,8 +322,8 @@ private:
                             const uint8_t *packed,
                             float          w_scale,
                             const float   *cb,
-                            int            padded,
-                            int            bits) {
+                            int             padded,
+                            int             bits) {
         int i = 0;
         if (bits == 4) {
             for (int b = 0; b < padded/2; ++b, i += 2) {
