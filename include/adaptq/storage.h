@@ -54,19 +54,6 @@ struct IStorageBackend {
                               float          scale,
                               uint8_t        format_tag) = 0;
 
-    /**
-     * Role-aware writes for KV storage. Backends that do not need separate
-     * K/V regions may use the default implementation.
-     */
-    virtual StorageSlot write_key(const uint8_t *data, int data_bytes,
-                                  float scale, uint8_t format_tag) {
-        return write(data, data_bytes, scale, format_tag);
-    }
-    virtual StorageSlot write_value(const uint8_t *data, int data_bytes,
-                                    float scale, uint8_t format_tag) {
-        return write(data, data_bytes, scale, format_tag);
-    }
-
     /** Read a previously written slot. Returned pointer valid until next write(). */
     virtual CompressResult read(StorageSlot slot) const = 0;
 
