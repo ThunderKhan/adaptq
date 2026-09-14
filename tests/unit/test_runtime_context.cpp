@@ -42,6 +42,34 @@ static void rand_vec(float *v, int d, unsigned seed = 42) {
     for (int i = 0; i < d; ++i) v[i] /= n;
 }
 
+static void exercise_har_capacity(int capacity) {
+    RuntimeContextConfig cfg = make_cfg(1, 1, 1, 4, capacity);
+    RuntimeContext ctx;
+    ctx.init(cfg);
+
+    const float k[] = {0.75f};
+    const float v[] = {1.25f};
+    const float q[] = {0.75f};
+    float out[1] = {0.f};
+
+    for (int i = 0; i < capacity; ++i)
+        ctx.append(0, 0, k, v);
+
+    REQUIRE(ctx.get_storage(0, 0)->bytes_used() > 0);
+
+    ComputeMetrics m = ctx.compute(0, 0, q, out);
+    REQUIRE(m.n_tokens_used == capacity);
+    REQUIRE(m.avg_bits_per_dim == 4.f);
+    REQUIRE(std::isfinite(out[0]));
+
+    /* A second compute must reuse the grown thread-local scratch without
+     * requiring another growth for the same cache size. */
+    float out_again[1] = {0.f};
+    ComputeMetrics m_again = ctx.compute(0, 0, q, out_again);
+    REQUIRE(m_again.n_tokens_used == capacity);
+    REQUIRE(std::isfinite(out_again[0]));
+}
+
 /* =========================================================================
  * Test cases
  * ========================================================================= */
@@ -145,6 +173,14 @@ TEST_CASE("RuntimeContext: K/V pairs remain aligned across FIFO wrap", "[runtime
     const float w4 = e / (1.0f + e);
     const float expected = 40.0f * w3 + 50.0f * w4;
     REQUIRE(std::abs(out[0] - expected) < 1e-5f);
+}
+
+TEST_CASE("RuntimeContext: HAR handles cache just above 65536 tokens", "[runtime][har][large]") {
+    exercise_har_capacity(65537);
+}
+
+TEST_CASE("RuntimeContext: HAR handles a larger realistic context", "[runtime][har][large]") {
+    exercise_har_capacity(131072);
 }
 
 TEST_CASE("RuntimeContext: compute on empty cache returns zero output", "[runtime]") {
