@@ -58,7 +58,7 @@ public:
     }
 
     void decompress(const CompressResult &r,
-                    int                    dim,
+                    int                   dim,
                     float                *out) const override {
         memcpy(out, r.data, dim * sizeof(float));
     }
