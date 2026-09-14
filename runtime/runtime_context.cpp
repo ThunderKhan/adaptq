@@ -151,11 +151,11 @@ void RuntimeContext::set_policy(IPolicy *policy) {
         rc.n_layers             = cfg_.n_layers;
         rc.n_heads              = cfg_.n_heads;
         rc.dim                  = cfg_.dim;
-        rc.bits                  = cfg_.bits;
-        rc.capacity              = cfg_.capacity;
-        rc.v_mass                = cfg_.v_mass;
-        rc.memory_budget_mb      = cfg_.memory_budget_mb;
-        rc.quality_floor         = cfg_.quality_floor;
+        rc.bits                 = cfg_.bits;
+        rc.capacity             = cfg_.capacity;
+        rc.v_mass               = cfg_.v_mass;
+        rc.memory_budget_mb     = cfg_.memory_budget_mb;
+        rc.quality_floor        = cfg_.quality_floor;
         rc.latency_hard_limit_us = cfg_.latency_hard_limit_us;
         policy_->init(cfg_.n_layers, cfg_.n_heads, rc);
     }
@@ -197,13 +197,13 @@ ExecutionContext RuntimeContext::make_ctx(int layer, int head) const {
     ctx.approaching_budget = (mem_used > 0.9f * cfg_.memory_budget_mb);
     ctx.recent_quality   = recent_quality_[idx];
     ctx.recent_latency_us = recent_latency_[idx];
-    ctx.storage          = storages_[idx].get();
-    ctx.kernel           = kernel_;
-    ctx.quality_oracle   = oracle_.get();
-    ctx.quality_floor    = cfg_.quality_floor;
+    ctx.storage           = storages_[idx].get();
+    ctx.kernel            = kernel_;
+    ctx.quality_oracle    = oracle_.get();
+    ctx.quality_floor     = cfg_.quality_floor;
     ctx.latency_hard_limit_us = cfg_.latency_hard_limit_us;
-    ctx.key_slots        = key_slots_[idx].data();
-    ctx.value_slots      = value_slots_[idx].data();
+    ctx.key_slots         = key_slots_[idx].data();
+    ctx.value_slots       = value_slots_[idx].data();
     ctx.oldest_slot_index = (cache_sizes_[idx] >= cfg_.capacity)
                           ? next_cache_index_[idx] : 0;
     return ctx;
@@ -248,22 +248,30 @@ void RuntimeContext::append(int          layer,
 
     /*
      * Storage slots are opaque handles returned by the compression layer.
-     * Keep the K/V pair together in a logical ring owned by RuntimeContext;
-     * the physical backend is free to place K and V wherever it chooses.
+     * Keep each K/V pair together in a logical ring owned by RuntimeContext.
+     * The physical backend is only the backing store; it is deliberately
+     * allowed to reuse physical slots independently of logical ordering.
      */
     const int ring_pos = next_cache_index_[idx];
 
     CompressResult k = comp->compress(k_vec, cfg_.dim, true, ctx);
     CompressResult v = comp->compress(v_vec, cfg_.dim, false, ctx);
+    assert(k.slot != ADAPTQ_INVALID_SLOT);
+    assert(v.slot != ADAPTQ_INVALID_SLOT);
     key_slots_[idx][ring_pos]   = k.slot;
     value_slots_[idx][ring_pos] = v.slot;
 
-    /* The logical cache is bounded even though the storage backend may have
-     * already overwritten the oldest physical pair on this write. */
+    /*
+     * RuntimeContext is the owner of the logical FIFO. The storage backend
+     * is provisioned for exactly 2 * capacity vector slots (one K and one V
+     * per token), so it can recycle its own physical ring without allowing
+     * a strategy eviction decision to invalidate the K/V handles recorded
+     * above. IEviction still receives the append notification so a policy
+     * can update its own state; physical ownership remains with storage.
+     */
     const int new_size = std::min(cache_sizes_[idx] + 1, cfg_.capacity);
     ctx.cache_size = new_size;
-    EvictionDecision d = evic->on_append(ctx);
-    (void)d;
+    (void)evic->on_append(ctx);
 
     cache_sizes_[idx] = new_size;
     next_cache_index_[idx] = (ring_pos + 1) % cfg_.capacity;
