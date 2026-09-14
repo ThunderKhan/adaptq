@@ -238,24 +238,21 @@ void RuntimeContext::append(int          layer,
     /* Compress K. */
     comp->compress(k_vec, cfg_.dim, true, ctx);
 
-    /* Compress V — update cache_size to reflect K already stored. */
+    /* Compress V. The storage backend maintains independent K/V regions,
+     * so K and V remain paired even when the FIFO rings wrap. */
     int n = cache_sizes_[idx];
-    /* V slots start at offset n in the storage ring. Storage write()
-     * increments its own internal head — K and V alternate, so the
-     * slot layout is [K0, K1, …, Kn, V0, V1, …, Vn] in a contiguous slab.
-     * ContiguousSlabStorage doesn't differentiate K/V — both appends just
-     * use the next slot. The read-back in compute() uses [i] for K and
-     * [n + i] for V (with n = number of K/V pairs). */
     comp->compress(v_vec, cfg_.dim, false, ctx);
 
-    /* Eviction decision (after both K and V are stored). */
-    ctx.cache_size = n + 1;
+    /* Eviction decision (after both K and V are stored). The storage ring
+     * performs the physical overwrite; this callback remains available to
+     * policies for observability. */
+    ctx.cache_size = std::min(n + 1, cfg_.capacity);
     EvictionDecision d = evic->on_append(ctx);
     if (d.evict && d.evict_slot >= 0) {
         storages_[idx]->free_slot((StorageSlot)d.evict_slot);
     }
 
-    cache_sizes_[idx] = n + 1;
+    cache_sizes_[idx] = std::min(n + 1, cfg_.capacity);
 
     /* Log K/V FP32 vectors if snapshot logging is enabled. */
     if (cfg_.log_tokens) {
@@ -313,15 +310,15 @@ ComputeMetrics RuntimeContext::compute(int          layer,
         return m;
     }
 
-    int padded = next_pow2_rt(cfg_.dim);
+    int padded = next_pow2_rt(cfg.dim);
 
     /* ---- 1. Rotate query (FWHT forward) -------------------------------- */
     q_rot_.assign(padded, 0.f);
-    memcpy(q_rot_.data(), q_vec, cfg_.dim * sizeof(float));
+    memcpy(q_rot_.data(), q_vec, cfg.dim * sizeof(float));
 
     /* L2-normalise */
     float qnorm = 0.f;
-    for (int i = 0; i < cfg_.dim; ++i) qnorm += q_vec[i] * q_vec[i];
+    for (int i = 0; i < cfg.dim; ++i) qnorm += q_vec[i] * q_vec[i];
     qnorm = sqrtf(qnorm + 1e-12f);
     float inv_qn = 1.f / qnorm;
     for (int i = 0; i < padded; ++i) q_rot_[i] *= inv_qn;
@@ -346,14 +343,14 @@ ComputeMetrics RuntimeContext::compute(int          layer,
     if (is_fp32) {
         /* ---- FP32 path: plain dot products ----------------------------- */
         logits_.resize(n);
-        const float attn_scale = 1.f / sqrtf((float)cfg_.dim);
+        const float attn_scale = 1.f / sqrtf((float)cfg.dim);
         float mx = -1e30f;
 
         for (int i = 0; i < n; ++i) {
             CompressResult kr = st->read((StorageSlot)i);
             const float *k  = reinterpret_cast<const float *>(kr.data);
             float dot = 0.f;
-            for (int d = 0; d < cfg_.dim; ++d) dot += q_vec[d] * k[d];
+            for (int d = 0; d < cfg.dim; ++d) dot += q_vec[d] * k[d];
             logits_[i] = dot * attn_scale;
             if (logits_[i] > mx) mx = logits_[i];
         }
@@ -368,14 +365,14 @@ ComputeMetrics RuntimeContext::compute(int          layer,
         m.logit_min = *std::min_element(logits_.begin(), logits_.begin() + n);
 
         /* V accumulation. */
-        v_acc_.assign(cfg_.dim, 0.f);
+        v_acc_.assign(cfg.dim, 0.f);
         for (int i = 0; i < n; ++i) {
             CompressResult vr = st->read((StorageSlot)(n + i));
             const float *v = reinterpret_cast<const float *>(vr.data);
             float w = logits_[i];
-            for (int d = 0; d < cfg_.dim; ++d) v_acc_[d] += w * v[d];
+            for (int d = 0; d < cfg.dim; ++d) v_acc_[d] += w * v[d];
         }
-        memcpy(out, v_acc_.data(), cfg_.dim * sizeof(float));
+        memcpy(out, v_acc_.data(), cfg.dim * sizeof(float));
 
         /* Quality: FP32 is always perfect. */
         recent_quality_[idx] = 1.f;
@@ -390,7 +387,7 @@ ComputeMetrics RuntimeContext::compute(int          layer,
             if (q) recent_quality_[idx] = q->estimated_quality();
         } else {
             /* Unknown quantized strategy: safe fallback → zero output. */
-            memset(out, 0, cfg_.dim * sizeof(float));
+            memset(out, 0, cfg.dim * sizeof(float));
         }
         m.logit_max = 0.f;
         m.logit_min = 0.f;
