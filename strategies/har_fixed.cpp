@@ -230,7 +230,7 @@ public:
 
         if (v_mass_ <= 0.f) {
             for (int i = 0; i < n; ++i) {
-                CompressResult vr = ctx.storage->read((StorageSlot)tl_slots[i] + (StorageSlot)n);
+                CompressResult vr = ctx.storage->read((StorageSlot)tl_slots[i] + (StorageSlot)ctx.cache_capacity);
                 vaccum_ref(acc, vr.data, vr.scale * tl_logits[i] * isp, cb, padded, bits);
             }
         } else {
@@ -241,7 +241,7 @@ public:
             float mass = 0.f;
             for (int i = 0; i < n && mass < v_mass_; ++i) {
                 int idx = tl_ord[i];
-                CompressResult vr = ctx.storage->read((StorageSlot)tl_slots[idx] + (StorageSlot)n);
+                CompressResult vr = ctx.storage->read((StorageSlot)tl_slots[idx] + (StorageSlot)ctx.cache_capacity);
                 vaccum_ref(acc, vr.data, vr.scale * tl_logits[idx] * isp, cb, padded, bits);
                 mass += tl_logits[idx];
             }

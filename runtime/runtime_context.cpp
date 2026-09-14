@@ -367,7 +367,7 @@ ComputeMetrics RuntimeContext::compute(int          layer,
         /* V accumulation. */
         v_acc_.assign(cfg_.dim, 0.f);
         for (int i = 0; i < n; ++i) {
-            CompressResult vr = st->read((StorageSlot)(n + i));
+            CompressResult vr = st->read((StorageSlot)(ctx.cache_capacity + i));
             const float *v = reinterpret_cast<const float *>(vr.data);
             float w = logits_[i];
             for (int d = 0; d < cfg_.dim; ++d) v_acc_[d] += w * v[d];
