@@ -173,8 +173,18 @@ private:
     std::vector<std::unique_ptr<IKVStrategy>>    strategies_;
     std::vector<std::unique_ptr<IStorageBackend>> storages_;
     std::vector<int>                             cache_sizes_;    /* per head */
+    std::vector<int>                             next_cache_index_; /* next ring position */
     std::vector<float>                           recent_quality_; /* per head */
     std::vector<float>                           recent_latency_; /* per head */
+
+    /*
+     * For each head, key_slots_[p] and value_slots_[p] are the storage
+     * handles returned when the logical ring position p was appended.
+     * They let compute traverse tokens in logical FIFO order without
+     * assuming that K/V writes are physically contiguous.
+     */
+    std::vector<std::vector<StorageSlot>> key_slots_;
+    std::vector<std::vector<StorageSlot>> value_slots_;
 
     /* Shared infrastructure (non-owning for kernel, owned for oracle). */
     IKernelBackend                   *kernel_  = nullptr;
@@ -220,4 +230,3 @@ const char **strategy_names(int *out_count);
 IStorageBackend *make_contiguous();
 
 } /* namespace adaptq (registry) */
-

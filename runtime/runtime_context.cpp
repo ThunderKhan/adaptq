@@ -94,8 +94,11 @@ void RuntimeContext::init(const RuntimeContextConfig &cfg,
     strategies_.clear();  strategies_.reserve(n);
     storages_.clear();    storages_.reserve(n);
     cache_sizes_.assign(n, 0);
+    next_cache_index_.assign(n, 0);
     recent_quality_.assign(n, -1.f);
     recent_latency_.assign(n, 0.f);
+    key_slots_.assign(n, std::vector<StorageSlot>(cfg.capacity, ADAPTQ_INVALID_SLOT));
+    value_slots_.assign(n, std::vector<StorageSlot>(cfg.capacity, ADAPTQ_INVALID_SLOT));
 
     /* slot_bytes = max packed bytes for one vector.
      * For HAR 4-bit: (padded * 4 + 7) / 8 = padded / 2 bytes.
@@ -121,7 +124,7 @@ void RuntimeContext::init(const RuntimeContextConfig &cfg,
             strategies_.emplace_back(strat);
 
             auto *stor = storage_fn();
-            /* Storage holds K and V slots — capacity × 2. */
+            /* Each token contributes one K slot and one V slot. */
             stor->init(cfg.capacity * 2, slot_bytes);
             storages_.emplace_back(stor);
         }
@@ -148,11 +151,11 @@ void RuntimeContext::set_policy(IPolicy *policy) {
         rc.n_layers             = cfg_.n_layers;
         rc.n_heads              = cfg_.n_heads;
         rc.dim                  = cfg_.dim;
-        rc.bits                 = cfg_.bits;
-        rc.capacity             = cfg_.capacity;
-        rc.v_mass               = cfg_.v_mass;
-        rc.memory_budget_mb     = cfg_.memory_budget_mb;
-        rc.quality_floor        = cfg_.quality_floor;
+        rc.bits                  = cfg_.bits;
+        rc.capacity              = cfg_.capacity;
+        rc.v_mass                = cfg_.v_mass;
+        rc.memory_budget_mb      = cfg_.memory_budget_mb;
+        rc.quality_floor         = cfg_.quality_floor;
         rc.latency_hard_limit_us = cfg_.latency_hard_limit_us;
         policy_->init(cfg_.n_layers, cfg_.n_heads, rc);
     }
@@ -165,8 +168,11 @@ void RuntimeContext::reset() {
     int n = cfg_.n_layers * cfg_.n_heads;
     for (int i = 0; i < n; ++i) {
         cache_sizes_[i]    = 0;
+        next_cache_index_[i] = 0;
         recent_quality_[i] = -1.f;
         recent_latency_[i] = 0.f;
+        std::fill(key_slots_[i].begin(), key_slots_[i].end(), ADAPTQ_INVALID_SLOT);
+        std::fill(value_slots_[i].begin(), value_slots_[i].end(), ADAPTQ_INVALID_SLOT);
         storages_[i]->reset();
         strategies_[i]->reset();
     }
@@ -196,6 +202,10 @@ ExecutionContext RuntimeContext::make_ctx(int layer, int head) const {
     ctx.quality_oracle   = oracle_.get();
     ctx.quality_floor    = cfg_.quality_floor;
     ctx.latency_hard_limit_us = cfg_.latency_hard_limit_us;
+    ctx.key_slots        = key_slots_[idx].data();
+    ctx.value_slots      = value_slots_[idx].data();
+    ctx.oldest_slot_index = (cache_sizes_[idx] >= cfg_.capacity)
+                          ? next_cache_index_[idx] : 0;
     return ctx;
 }
 
@@ -221,6 +231,7 @@ void RuntimeContext::append(int          layer,
                             const float *v_vec) {
     assert(layer >= 0 && layer < cfg_.n_layers);
     assert(head  >= 0 && head  < cfg_.n_heads);
+    assert(cfg_.capacity > 0);
 
     int idx = head_idx(layer, head);
     ExecutionContext ctx = make_ctx(layer, head);
@@ -235,27 +246,27 @@ void RuntimeContext::append(int          layer,
     ICompression *comp = strat->compression();
     IEviction    *evic = strat->eviction();
 
-    /* Compress K. */
-    comp->compress(k_vec, cfg_.dim, true, ctx);
+    /*
+     * Storage slots are opaque handles returned by the compression layer.
+     * Keep the K/V pair together in a logical ring owned by RuntimeContext;
+     * the physical backend is free to place K and V wherever it chooses.
+     */
+    const int ring_pos = next_cache_index_[idx];
 
-    /* Compress V — update cache_size to reflect K already stored. */
-    int n = cache_sizes_[idx];
-    /* V slots start at offset n in the storage ring. Storage write()
-     * increments its own internal head — K and V alternate, so the
-     * slot layout is [K0, K1, …, Kn, V0, V1, …, Vn] in a contiguous slab.
-     * ContiguousSlabStorage doesn't differentiate K/V — both appends just
-     * use the next slot. The read-back in compute() uses [i] for K and
-     * [n + i] for V (with n = number of K/V pairs). */
-    comp->compress(v_vec, cfg_.dim, false, ctx);
+    CompressResult k = comp->compress(k_vec, cfg_.dim, true, ctx);
+    CompressResult v = comp->compress(v_vec, cfg_.dim, false, ctx);
+    key_slots_[idx][ring_pos]   = k.slot;
+    value_slots_[idx][ring_pos] = v.slot;
 
-    /* Eviction decision (after both K and V are stored). */
-    ctx.cache_size = n + 1;
+    /* The logical cache is bounded even though the storage backend may have
+     * already overwritten the oldest physical pair on this write. */
+    const int new_size = std::min(cache_sizes_[idx] + 1, cfg_.capacity);
+    ctx.cache_size = new_size;
     EvictionDecision d = evic->on_append(ctx);
-    if (d.evict && d.evict_slot >= 0) {
-        storages_[idx]->free_slot((StorageSlot)d.evict_slot);
-    }
+    (void)d;
 
-    cache_sizes_[idx] = n + 1;
+    cache_sizes_[idx] = new_size;
+    next_cache_index_[idx] = (ring_pos + 1) % cfg_.capacity;
 
     /* Log K/V FP32 vectors if snapshot logging is enabled. */
     if (cfg_.log_tokens) {
@@ -326,20 +337,13 @@ ComputeMetrics RuntimeContext::compute(int          layer,
     float inv_qn = 1.f / qnorm;
     for (int i = 0; i < padded; ++i) q_rot_[i] *= inv_qn;
 
-    /* Apply kernel FWHT forward — needs Rademacher D from the strategy's
-     * underlying Quantizer. We call the kernel backend directly if the
-     * strategy uses HARFixedStrategy internals. For V1 we call the scalar
-     * fwht_forward directly since all strategies use the same Rademacher D.
-     *
-     * Design note: a proper V2 extension would expose "query rotation" as
-     * an IKernelBackend method. For now, IKernelBackend::fwht_forward
-     * takes a D vector; we get D from the strategy cast if possible,
-     * otherwise fall back to an identity D (all +1). */
-    /* Attempt dynamic cast to get the Rademacher D — strategy-specific. */
-
+    /* Apply kernel FWHT — strategy-specific custom paths may perform their
+     * own rotation. The reference HAR implementation consumes ctx.key_slots
+     * and ctx.value_slots below. */
 
     /* Read one K slot to determine the format_tag. */
-    CompressResult sample = st->read(0);
+    const int first_pos = ctx.oldest_slot_index;
+    CompressResult sample = st->read((StorageSlot)ctx.key_slots[first_pos]);
     const uint8_t ftag   = sample.format_tag;
     const bool is_fp32   = (ftag == 0xFF);
 
@@ -350,7 +354,8 @@ ComputeMetrics RuntimeContext::compute(int          layer,
         float mx = -1e30f;
 
         for (int i = 0; i < n; ++i) {
-            CompressResult kr = st->read((StorageSlot)i);
+            const int ring_pos = (ctx.oldest_slot_index + i) % cfg_.capacity;
+            CompressResult kr = st->read((StorageSlot)ctx.key_slots[ring_pos]);
             const float *k  = reinterpret_cast<const float *>(kr.data);
             float dot = 0.f;
             for (int d = 0; d < cfg_.dim; ++d) dot += q_vec[d] * k[d];
@@ -370,7 +375,8 @@ ComputeMetrics RuntimeContext::compute(int          layer,
         /* V accumulation. */
         v_acc_.assign(cfg_.dim, 0.f);
         for (int i = 0; i < n; ++i) {
-            CompressResult vr = st->read((StorageSlot)(n + i));
+            const int ring_pos = (ctx.oldest_slot_index + i) % cfg_.capacity;
+            CompressResult vr = st->read((StorageSlot)ctx.value_slots[ring_pos]);
             const float *v = reinterpret_cast<const float *>(vr.data);
             float w = logits_[i];
             for (int d = 0; d < cfg_.dim; ++d) v_acc_[d] += w * v[d];
@@ -417,7 +423,6 @@ ComputeMetrics RuntimeContext::compute(int          layer,
     /* ---- 6. Metrics ---------------------------------------------------- */
     auto t1 = std::chrono::high_resolution_clock::now();
     float lat_us = (float)std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-
     recent_latency_[idx] = lat_us;
     m.latency_us         = lat_us;
     m.quality            = recent_quality_[idx];

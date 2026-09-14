@@ -35,7 +35,7 @@ struct TokenContext {
 /* ---- Post-compute feedback passed into on_attention() ------------------ */
 struct AttentionFeedback {
     const float *weights;  /* softmax weights for all cached tokens [n]    */
-    const int   *slots;    /* slot indices corresponding to each weight [n] */
+    const int   *slots;    /* logical slot indices corresponding to weights [n] */
     int          n;        /* number of cached tokens                      */
     float        latency_us;
 };
@@ -66,6 +66,23 @@ struct ExecutionContext {
     /* Active constraints */
     float quality_floor;           /* abort compression if quality < this */
     float latency_hard_limit_us;   /* 0 = no limit                        */
+
+    /*
+     * Logical KV-cache ordering. These arrays are owned by RuntimeContext
+     * and indexed by physical ring position. The oldest cached token is at
+     * oldest_slot_index; callers must use (oldest_slot_index + i) %
+     * cache_capacity to walk tokens from oldest to newest.
+     *
+     * StorageSlot is defined by storage.h, which cannot be included here
+     * because storage.h itself includes context.h. uint32_t is the exact
+     * underlying type of StorageSlot.
+     *
+     * The pointers are non-owning and valid only for the duration of the
+     * current strategy call. A strategy must not retain them.
+     */
+    const uint32_t *key_slots;
+    const uint32_t *value_slots;
+    int oldest_slot_index;
 };
 
 } /* namespace adaptq */

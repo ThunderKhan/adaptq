@@ -44,7 +44,7 @@ static void rand_vec(float *v, int d, unsigned seed = 42) {
 
 /* =========================================================================
  * Test cases
- * ========================================================================= */
+ * ======================================================================= */
 
 TEST_CASE("RuntimeContext: init does not throw", "[runtime]") {
     RuntimeContextConfig cfg = make_cfg();
@@ -102,6 +102,39 @@ TEST_CASE("RuntimeContext: compute returns valid ComputeMetrics after append", "
     float norm = 0.f;
     for (float x : out) norm += x * x;
     REQUIRE(norm > 1e-12f);
+}
+
+TEST_CASE("RuntimeContext: K/V pairs remain aligned across FIFO wrap", "[runtime][storage]") {
+    RuntimeContextConfig cfg = make_cfg(1, 1, 1, 4, 2);
+    RuntimeContext ctx;
+    StrategyFactory sfn = strategy_factory_by_name("fp_passthrough");
+    REQUIRE(sfn != nullptr);
+    ctx.init(cfg, sfn, []() -> IStorageBackend * {
+        return adaptq::make_contiguous();
+    });
+
+    const float q[] = {1.0f};
+    const float k0[] = {0.0f};
+    const float v0[] = {10.0f};
+    const float k1[] = {1.0f};
+    const float v1[] = {20.0f};
+    const float k2[] = {2.0f};
+    const float v2[] = {30.0f};
+    float out[1] = {0.0f};
+
+    ctx.append(0, 0, k0, v0);
+    ctx.append(0, 0, k1, v1);
+    ctx.append(0, 0, k2, v2);
+
+    ComputeMetrics m = ctx.compute(0, 0, q, out);
+    REQUIRE(m.n_tokens_used == 2);
+
+    /* The cache contains tokens 1 and 2 after FIFO eviction. */
+    const float e = std::exp(1.0f);
+    const float w1 = 1.0f / (1.0f + e);
+    const float w2 = e / (1.0f + e);
+    const float expected = 20.0f * w1 + 30.0f * w2;
+    REQUIRE(std::abs(out[0] - expected) < 1e-5f);
 }
 
 TEST_CASE("RuntimeContext: compute on empty cache returns zero output", "[runtime]") {

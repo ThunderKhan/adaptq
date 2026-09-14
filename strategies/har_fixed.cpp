@@ -186,6 +186,8 @@ public:
         const int bits   = compress_.bits;
         if (!n) { memset(out, 0, dim * sizeof(float)); return 0; }
 
+        assert(ctx.key_slots && ctx.value_slots);
+        assert(ctx.cache_capacity > 0);
         assert(padded <= TL_BUF && n <= 65536);
 
         /* 1. Rotate query (L2-normalise → D-apply → FWHT → scale) */
@@ -205,13 +207,15 @@ public:
         const float  attn_s = 1.f / (sqrtf((float)dim) * (float)padded);
         const float  isp    = 1.f / sqrtf((float)padded);
 
-        /* 2. Build slot list from storage backend */
-        for (int i = 0; i < n; ++i) tl_slots[i] = i;
+        /* 2. Build the physical ring-position list in logical FIFO order. */
+        for (int i = 0; i < n; ++i)
+            tl_slots[i] = (ctx.oldest_slot_index + i) % ctx.cache_capacity;
 
         /* 3. K-dot + softmax (scalar reference path) */
         float mx = -1e30f;
         for (int i = 0; i < n; ++i) {
-            CompressResult kr = ctx.storage->read((StorageSlot)tl_slots[i]);
+            const int ring_pos = tl_slots[i];
+            CompressResult kr = ctx.storage->read((StorageSlot)ctx.key_slots[ring_pos]);
             float dot = kdot_ref(qr, kr.data, cb, padded, bits);
             tl_logits[i] = dot * attn_s * kr.scale;
             if (tl_logits[i] > mx) mx = tl_logits[i];
@@ -230,7 +234,8 @@ public:
 
         if (v_mass_ <= 0.f) {
             for (int i = 0; i < n; ++i) {
-                CompressResult vr = ctx.storage->read((StorageSlot)tl_slots[i] + (StorageSlot)n);
+                const int ring_pos = tl_slots[i];
+                CompressResult vr = ctx.storage->read((StorageSlot)ctx.value_slots[ring_pos]);
                 vaccum_ref(acc, vr.data, vr.scale * tl_logits[i] * isp, cb, padded, bits);
             }
         } else {
@@ -241,7 +246,8 @@ public:
             float mass = 0.f;
             for (int i = 0; i < n && mass < v_mass_; ++i) {
                 int idx = tl_ord[i];
-                CompressResult vr = ctx.storage->read((StorageSlot)tl_slots[idx] + (StorageSlot)n);
+                const int ring_pos = tl_slots[idx];
+                CompressResult vr = ctx.storage->read((StorageSlot)ctx.value_slots[ring_pos]);
                 vaccum_ref(acc, vr.data, vr.scale * tl_logits[idx] * isp, cb, padded, bits);
                 mass += tl_logits[idx];
             }
