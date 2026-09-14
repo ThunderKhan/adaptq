@@ -101,13 +101,13 @@ void RuntimeContext::init(const RuntimeContextConfig &cfg,
      * For HAR 4-bit: (padded * 4 + 7) / 8 = padded / 2 bytes.
      * For FP32:      dim * 4 bytes.
      * Use the larger bound to keep storage backend generic.  */
-    int padded       = next_pow2_rt(cfg.dim);
+    int padded       = next_pow2_rt(cfg_.dim);
     int slot_bytes_q = (padded * cfg.bits + 7) / 8;
-    int slot_bytes_f = cfg.dim * (int)sizeof(float);
+    int slot_bytes_f = cfg_.dim * (int)sizeof(float);
     int slot_bytes   = std::max(slot_bytes_q, slot_bytes_f);
 
     HeadConfig hcfg;
-    hcfg.dim      = cfg.dim;
+    hcfg.dim      = cfg_.dim;
     hcfg.bits     = cfg.bits;
     hcfg.capacity = cfg.capacity;
     hcfg.v_mass   = cfg.v_mass;
@@ -310,15 +310,15 @@ ComputeMetrics RuntimeContext::compute(int          layer,
         return m;
     }
 
-    int padded = next_pow2_rt(cfg.dim);
+    int padded = next_pow2_rt(cfg_.dim);
 
     /* ---- 1. Rotate query (FWHT forward) -------------------------------- */
     q_rot_.assign(padded, 0.f);
-    memcpy(q_rot_.data(), q_vec, cfg.dim * sizeof(float));
+    memcpy(q_rot_.data(), q_vec, cfg_.dim * sizeof(float));
 
     /* L2-normalise */
     float qnorm = 0.f;
-    for (int i = 0; i < cfg.dim; ++i) qnorm += q_vec[i] * q_vec[i];
+    for (int i = 0; i < cfg_.dim; ++i) qnorm += q_vec[i] * q_vec[i];
     qnorm = sqrtf(qnorm + 1e-12f);
     float inv_qn = 1.f / qnorm;
     for (int i = 0; i < padded; ++i) q_rot_[i] *= inv_qn;
@@ -343,14 +343,14 @@ ComputeMetrics RuntimeContext::compute(int          layer,
     if (is_fp32) {
         /* ---- FP32 path: plain dot products ----------------------------- */
         logits_.resize(n);
-        const float attn_scale = 1.f / sqrtf((float)cfg.dim);
+        const float attn_scale = 1.f / sqrtf((float)cfg_.dim);
         float mx = -1e30f;
 
         for (int i = 0; i < n; ++i) {
             CompressResult kr = st->read((StorageSlot)i);
             const float *k  = reinterpret_cast<const float *>(kr.data);
             float dot = 0.f;
-            for (int d = 0; d < cfg.dim; ++d) dot += q_vec[d] * k[d];
+            for (int d = 0; d < cfg_.dim; ++d) dot += q_vec[d] * k[d];
             logits_[i] = dot * attn_scale;
             if (logits_[i] > mx) mx = logits_[i];
         }
@@ -365,14 +365,14 @@ ComputeMetrics RuntimeContext::compute(int          layer,
         m.logit_min = *std::min_element(logits_.begin(), logits_.begin() + n);
 
         /* V accumulation. */
-        v_acc_.assign(cfg.dim, 0.f);
+        v_acc_.assign(cfg_.dim, 0.f);
         for (int i = 0; i < n; ++i) {
             CompressResult vr = st->read((StorageSlot)(n + i));
             const float *v = reinterpret_cast<const float *>(vr.data);
             float w = logits_[i];
-            for (int d = 0; d < cfg.dim; ++d) v_acc_[d] += w * v[d];
+            for (int d = 0; d < cfg_.dim; ++d) v_acc_[d] += w * v[d];
         }
-        memcpy(out, v_acc_.data(), cfg.dim * sizeof(float));
+        memcpy(out, v_acc_.data(), cfg_.dim * sizeof(float));
 
         /* Quality: FP32 is always perfect. */
         recent_quality_[idx] = 1.f;
@@ -387,7 +387,7 @@ ComputeMetrics RuntimeContext::compute(int          layer,
             if (q) recent_quality_[idx] = q->estimated_quality();
         } else {
             /* Unknown quantized strategy: safe fallback → zero output. */
-            memset(out, 0, cfg.dim * sizeof(float));
+            memset(out, 0, cfg_.dim * sizeof(float));
         }
         m.logit_max = 0.f;
         m.logit_min = 0.f;

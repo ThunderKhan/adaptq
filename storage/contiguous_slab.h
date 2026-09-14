@@ -59,19 +59,6 @@ public:
         return slot;
     }
 
-    /* Explicit KV-aware writes for callers that know the role. */
-    StorageSlot write_key(const uint8_t *data, int data_bytes,
-                          float scale, uint8_t format_tag) override {
-        return write_role(data, data_bytes, scale, format_tag,
-                          true, role_capacity());
-    }
-
-    StorageSlot write_value(const uint8_t *data, int data_bytes,
-                            float scale, uint8_t format_tag) override {
-        return write_role(data, data_bytes, scale, format_tag,
-                          false, role_capacity());
-    }
-
     CompressResult read(StorageSlot slot) const override {
         assert((int)slot < capacity_);
         return CompressResult{
