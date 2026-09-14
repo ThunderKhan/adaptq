@@ -44,7 +44,7 @@ static void rand_vec(float *v, int d, unsigned seed = 42) {
 
 /* =========================================================================
  * Test cases
- * ======================================================================= */
+ * ========================================================================= */
 
 TEST_CASE("RuntimeContext: init does not throw", "[runtime]") {
     RuntimeContextConfig cfg = make_cfg();
@@ -120,20 +120,30 @@ TEST_CASE("RuntimeContext: K/V pairs remain aligned across FIFO wrap", "[runtime
     const float v1[] = {20.0f};
     const float k2[] = {2.0f};
     const float v2[] = {30.0f};
+    const float k3[] = {3.0f};
+    const float v3[] = {40.0f};
+    const float k4[] = {4.0f};
+    const float v4[] = {50.0f};
     float out[1] = {0.0f};
 
+    /* Five appends force multiple overwrites of a capacity-two cache. */
     ctx.append(0, 0, k0, v0);
     ctx.append(0, 0, k1, v1);
     ctx.append(0, 0, k2, v2);
+    ctx.append(0, 0, k3, v3);
+    ctx.append(0, 0, k4, v4);
+
+    REQUIRE(ctx.get_storage(0, 0)->bytes_used() ==
+            ctx.get_storage(0, 0)->bytes_capacity());
 
     ComputeMetrics m = ctx.compute(0, 0, q, out);
     REQUIRE(m.n_tokens_used == 2);
 
-    /* The cache contains tokens 1 and 2 after FIFO eviction. */
+    /* The logical cache contains tokens 3 and 4 after repeated FIFO wraps. */
     const float e = std::exp(1.0f);
-    const float w1 = 1.0f / (1.0f + e);
-    const float w2 = e / (1.0f + e);
-    const float expected = 20.0f * w1 + 30.0f * w2;
+    const float w3 = 1.0f / (1.0f + e);
+    const float w4 = e / (1.0f + e);
+    const float expected = 40.0f * w3 + 50.0f * w4;
     REQUIRE(std::abs(out[0] - expected) < 1e-5f);
 }
 
