@@ -32,6 +32,7 @@ public:
         size_ = head_ = next_slot_ = 0;
         k_head_ = k_next_slot_ = k_size_ = 0;
         v_head_ = v_next_slot_ = v_size_ = 0;
+        write_phase_key_ = true;
         size_t total = (size_t)capacity * (size_t)max_slot_bytes;
         data_ = static_cast<uint8_t *>(aligned_alloc_64(total));
         if (!data_) throw std::bad_alloc();
@@ -44,21 +45,21 @@ public:
         size_ = head_ = next_slot_ = 0;
         k_head_ = k_next_slot_ = k_size_ = 0;
         v_head_ = v_next_slot_ = v_size_ = 0;
+        write_phase_key_ = true;
     }
 
     StorageSlot write(const uint8_t *data, int data_bytes,
                       float scale, uint8_t format_tag) override {
-        assert(data && data_bytes <= slot_bytes_);
-        StorageSlot slot;
-        if (size_ < capacity_) { slot = next_slot_++; size_++; }
-        else                   { slot = head_; head_ = (head_ + 1) % capacity_; }
-        write_slot(slot, data, data_bytes, scale, format_tag);
+        /* Runtime's compression contract writes K immediately followed by V.
+         * Keep that legacy call sequence compatible while physically placing
+         * K in [0, logical_capacity) and V in the second half. */
+        StorageSlot slot = write_role(data, data_bytes, scale, format_tag,
+                                      write_phase_key_, role_capacity());
+        write_phase_key_ = !write_phase_key_;
         return slot;
     }
 
-    /* KV-aware regions: the runtime allocates 2 * logical capacity slots,
-     * with K in the first half and V in the second half. Each role has its
-     * own FIFO ring, so K/V pairs stay associated after wrap-around. */
+    /* Explicit KV-aware writes for callers that know the role. */
     StorageSlot write_key(const uint8_t *data, int data_bytes,
                           float scale, uint8_t format_tag) override {
         return write_role(data, data_bytes, scale, format_tag,
@@ -102,6 +103,7 @@ private:
     StorageSlot write_role(const uint8_t *data, int data_bytes,
                            float scale, uint8_t format_tag,
                            bool is_key, int logical_capacity) {
+        assert(data && data_bytes <= slot_bytes_);
         assert(logical_capacity > 0);
         int &head = is_key ? k_head_ : v_head_;
         int &next = is_key ? k_next_slot_ : v_next_slot_;
@@ -153,10 +155,11 @@ private:
     int                  next_slot_  = 0;
     int                  k_head_     = 0;
     int                  k_next_slot_= 0;
-    int                  k_size_    = 0;
+    int                  k_size_     = 0;
     int                  v_head_     = 0;
     int                  v_next_slot_= 0;
-    int                  v_size_    = 0;
+    int                  v_size_     = 0;
+    bool                 write_phase_key_ = true;
     std::vector<float>   scale_;
     std::vector<uint8_t> format_tag_;
 };
