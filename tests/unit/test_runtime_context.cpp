@@ -22,7 +22,7 @@ static RuntimeContextConfig make_cfg(int n_layers = 1, int n_heads = 2,
     cfg.n_layers  = n_layers;
     cfg.n_heads   = n_heads;
     cfg.dim       = dim;
-    cfg.bits      = bits;
+    cfg.bits       = bits;
     cfg.capacity  = capacity;
     cfg.log_tokens = false;
     return cfg;
@@ -153,6 +153,35 @@ TEST_CASE("RuntimeContext: multiple appends accumulate", "[runtime]") {
     rand_vec(q.data(), 64, 777);
     ComputeMetrics m = ctx.compute(0, 0, q.data(), out.data());
     REQUIRE(m.n_tokens_used == 10);
+}
+
+TEST_CASE("RuntimeContext: HAR handles 65537 cached tokens", "[runtime][har]") {
+    constexpr int dim = 16;
+    constexpr int token_count = 65537;
+
+    /* Keep one extra cache slot so this exercises the >65536 scratch path
+     * without involving ring eviction. */
+    RuntimeContextConfig cfg = make_cfg(1, 1, dim, 4, token_count + 1);
+    RuntimeContext ctx;
+    ctx.init(cfg);
+
+    std::vector<float> k(dim), v(dim), q(dim), out(dim, 0.f);
+    rand_vec(k.data(), dim, 1001);
+    rand_vec(v.data(), dim, 2002);
+    rand_vec(q.data(), dim, 3003);
+
+    for (int t = 0; t < token_count; ++t)
+        ctx.append(0, 0, k.data(), v.data());
+
+    ComputeMetrics m = ctx.compute(0, 0, q.data(), out.data());
+
+    REQUIRE(m.n_tokens_used == token_count);
+    for (float x : out)
+        REQUIRE(std::isfinite(x));
+
+    float norm = 0.f;
+    for (float x : out) norm += x * x;
+    REQUIRE(norm > 1e-12f);
 }
 
 TEST_CASE("RuntimeContext: fp_passthrough strategy init", "[runtime]") {
