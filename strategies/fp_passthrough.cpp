@@ -43,22 +43,20 @@ public:
 
     CompressResult compress(const float           *x,
                             int                    dim,
-                            bool                  /*is_key*/,
+                            bool                  is_key,
                             const ExecutionContext &ctx) override {
-        /* Write raw float32 bytes directly into the storage backend. */
+        /* Write raw float32 bytes directly into the role-specific storage
+         * region so K/V pairs remain associated after FIFO wrap-around. */
         int bytes = dim * sizeof(float);
-        StorageSlot slot = ctx.storage->write(
-            reinterpret_cast<const uint8_t *>(x),
-            bytes,
-            1.0f,        /* scale = 1: no quantization */
-            FPTAG_F32
-        );
+        StorageSlot slot = is_key
+            ? ctx.storage->write_key(reinterpret_cast<const uint8_t *>(x), bytes, 1.0f, FPTAG_F32)
+            : ctx.storage->write_value(reinterpret_cast<const uint8_t *>(x), bytes, 1.0f, FPTAG_F32);
         const CompressResult r = ctx.storage->read(slot);
         return r;
     }
 
     void decompress(const CompressResult &r,
-                    int                   dim,
+                    int                    dim,
                     float                *out) const override {
         memcpy(out, r.data, dim * sizeof(float));
     }
@@ -72,7 +70,7 @@ public:
     EvictionDecision on_append(const ExecutionContext &ctx) override {
         /* Evict the oldest slot when at capacity.
          * ContiguousSlabStorage handles ring-buffer eviction internally
-         * on the next write(), so no explicit slot is needed here.       */
+         * on the next role-specific write(), so no explicit slot is needed. */
         if (ctx.cache_size >= ctx.cache_capacity)
             return {true, ctx.cache_size % ctx.cache_capacity};
         return {false, -1};
