@@ -99,6 +99,21 @@ TEST_CASE("adaptq_create with invalid parameters returns null", "[api][security]
     REQUIRE(std::string(adaptq_last_error()).size() > 0);
 }
 
+TEST_CASE("adaptq_create rejects unsupported quantization bit widths", "[api][security]") {
+    for (int bits : {1, 5, 6, 8, 16}) {
+        REQUIRE(adaptq_create(128, bits, 1024, 42, 0.f, 0) == nullptr);
+        REQUIRE(std::string(adaptq_last_error()).size() > 0);
+    }
+}
+
+TEST_CASE("adaptq_create accepts all supported quantization bit widths", "[api]") {
+    for (int bits : {2, 3, 4}) {
+        adaptq_ctx_t h = adaptq_create(128, bits, 1024, 42, 0.f, 0);
+        REQUIRE(h != nullptr);
+        adaptq_destroy(h);
+    }
+}
+
 /* ---- Multi-head -------------------------------------------------------- */
 
 TEST_CASE("adaptq_mha_create / destroy", "[api][mha]") {
@@ -154,6 +169,21 @@ TEST_CASE("adaptq_mha_create with invalid parameters returns null", "[api][mha][
     REQUIRE(adaptq_mha_create(4, 0, 4, 1024, 0, 0.f, 0) == nullptr);
     REQUIRE(adaptq_mha_create(4, 128, -1, 1024, 0, 0.f, 0) == nullptr);
     REQUIRE(std::string(adaptq_last_error()).size() > 0);
+}
+
+TEST_CASE("adaptq_mha_create rejects unsupported quantization bit widths", "[api][mha][security]") {
+    for (int bits : {1, 5, 6, 8, 16}) {
+        REQUIRE(adaptq_mha_create(4, 128, bits, 1024, 0, 0.f, 0) == nullptr);
+        REQUIRE(std::string(adaptq_last_error()).size() > 0);
+    }
+}
+
+TEST_CASE("adaptq_mha_create accepts all supported quantization bit widths", "[api][mha]") {
+    for (int bits : {2, 3, 4}) {
+        adaptq_mha_t mha = adaptq_mha_create(4, 128, bits, 1024, 0, 0.f, 0);
+        REQUIRE(mha != nullptr);
+        adaptq_mha_destroy(mha);
+    }
 }
 
 TEST_CASE("adaptq_mha_append: exact upper bound head_idx sets error", "[api][mha][security]") {

@@ -20,6 +20,10 @@ static void set_error(adaptq_error_t /*code*/, const char *msg) {
 
 const char *adaptq_last_error(void) { return tl_error_buf; }
 
+static bool supported_bits(int bits) {
+  return bits == 2 || bits == 3 || bits == 4;
+}
+
 /* -----------------------------------------------------------------------
  * Internal state structs
  * ----------------------------------------------------------------------- */
@@ -41,8 +45,9 @@ struct AdapTQMHA {
 
 adaptq_ctx_t adaptq_create(int dim, int bits, int capacity, uint64_t seed,
                            float v_mass, int hybrid_thresh) {
-  if (dim <= 0 || bits <= 0 || capacity < 0 || hybrid_thresh < 0) {
-    set_error(ADAPTQ_ERR_INVALID_ARG, "adaptq_create: invalid dimensions or capacity");
+  if (dim <= 0 || !supported_bits(bits) || capacity < 0 || hybrid_thresh < 0) {
+    set_error(ADAPTQ_ERR_INVALID_ARG,
+              "adaptq_create: invalid dimensions, bits, or capacity");
     return nullptr;
   }
   auto *ctx = new AdapTQCtx();
@@ -94,8 +99,10 @@ size_t adaptq_kv_bytes(adaptq_ctx_t h) {
 adaptq_mha_t adaptq_mha_create(int n_heads, int dim, int bits, int capacity,
                                uint64_t base_seed, float v_mass,
                                int hybrid_thresh) {
-  if (n_heads <= 0 || dim <= 0 || bits <= 0 || capacity < 0 || hybrid_thresh < 0) {
-    set_error(ADAPTQ_ERR_INVALID_ARG, "adaptq_mha_create: invalid parameters");
+  if (n_heads <= 0 || dim <= 0 || !supported_bits(bits) || capacity < 0 ||
+      hybrid_thresh < 0) {
+    set_error(ADAPTQ_ERR_INVALID_ARG,
+              "adaptq_mha_create: invalid parameters or bits");
     return nullptr;
   }
   auto *mha = new AdapTQMHA();
