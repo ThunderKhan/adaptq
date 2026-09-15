@@ -214,12 +214,10 @@ class OllamaAdapter(IRuntimeAdapter):
             result.wall_time_ms        = (t1 - t0) * 1000.0
             if result.wall_time_ms > 0:
                 result.tokens_per_sec  = eval_count / (result.wall_time_ms / 1000.0)
-            # KV stats: approximation (no actual KV access)
-            result.kv_stats = KVStats(
-                kv_bytes_fp16=eval_count * 32 * 128 * 2 * 2,  # placeholder
-                kv_bytes_adaptq=0,
-                n_tokens_cached=eval_count,
-            )
+
+            # Ollama does not expose its internal KV cache state through this adapter.
+            # Leave KVStats at their zero defaults rather than reporting invented values.
+            result.kv_stats = KVStats()
 
         except Exception as e:
             result.error = str(e)
