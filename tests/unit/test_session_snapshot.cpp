@@ -159,6 +159,7 @@ TEST_CASE("SessionSnapshot: load rejects truncated file", "[snapshot]") {
     REQUIRE_THROWS_AS(SessionSnapshot::load(path), std::runtime_error);
     fs::remove(path);
 }
+
 TEST_CASE("SessionSnapshot: load missing file throws", "[snapshot]") {
     REQUIRE_THROWS_AS(SessionSnapshot::load("/nonexistent/path/adaptq.aqss"),
                       std::runtime_error);
@@ -231,6 +232,7 @@ TEST_CASE("SessionSnapshot: load rejects malicious allocation sizes", "[snapshot
     REQUIRE_THROWS_AS(SessionSnapshot::load(path), std::runtime_error);
     fs::remove(path);
 }
+
 TEST_CASE("SessionSnapshot: load rejects truncated files safely", "[snapshot][security]") {
     std::string path = tmp_path("adaptq_truncated_2.aqss");
     auto ctx = make_ctx_with_tokens(5, 64, true);
@@ -360,6 +362,60 @@ TEST_CASE("SessionSnapshot: load rejects token vector allocation larger than rem
         write_i32(f, 0); // layer
         write_i32(f, 0); // head
         write_i32(f, 1000000000); // dim
+    }
+
+    REQUIRE_THROWS_AS(SessionSnapshot::load(path), std::runtime_error);
+    fs::remove(path);
+}
+
+TEST_CASE("SessionSnapshot: load rejects excessive head metadata allocation", "[snapshot][security]") {
+    std::string path = tmp_path("adaptq_excessive_head_metadata.aqss");
+    {
+        std::ofstream f(path, std::ios::binary);
+        const uint32_t magic = SessionSnapshot::kMagic;
+        const uint32_t version = SessionSnapshot::kVersion;
+        f.write(reinterpret_cast<const char *>(&magic), 4);
+        f.write(reinterpret_cast<const char *>(&version), 4);
+        write_i32(f, 50000);       // n_layers
+        write_i32(f, 40000);       // n_heads
+        write_i32(f, 64);          // dim
+        write_i32(f, 4);           // bits
+        write_i32(f, 0);           // n_tokens
+        write_i32(f, 2000000000);  // n_heads_total
+        uint64_t flags = 0;
+        f.write(reinterpret_cast<const char *>(&flags), sizeof(flags));
+    }
+
+    REQUIRE_THROWS_AS(SessionSnapshot::load(path), std::runtime_error);
+    fs::remove(path);
+}
+
+TEST_CASE("SessionSnapshot: load rejects excessive token log metadata allocation", "[snapshot][security]") {
+    std::string path = tmp_path("adaptq_excessive_token_metadata.aqss");
+    {
+        std::ofstream f(path, std::ios::binary);
+        const uint32_t magic = SessionSnapshot::kMagic;
+        const uint32_t version = SessionSnapshot::kVersion;
+        f.write(reinterpret_cast<const char *>(&magic), 4);
+        f.write(reinterpret_cast<const char *>(&version), 4);
+        write_i32(f, 1);          // n_layers
+        write_i32(f, 1);          // n_heads
+        write_i32(f, 64);         // dim
+        write_i32(f, 4);          // bits
+        write_i32(f, 0);          // n_tokens
+        write_i32(f, 1);          // n_heads_total
+        uint64_t flags = 1;
+        f.write(reinterpret_cast<const char *>(&flags), sizeof(flags));
+
+        write_i32(f, 0);          // layer
+        write_i32(f, 0);          // head
+        write_i32(f, 0);          // cache_size
+        write_i32(f, 0);          // slot_bytes
+        uint64_t data_bytes = 0;
+        f.write(reinterpret_cast<const char *>(&data_bytes), sizeof(data_bytes));
+        write_i32(f, 0);          // n_scales
+        write_i32(f, 0);          // n_tags
+        write_i32(f, 2000000000);  // n_entries
     }
 
     REQUIRE_THROWS_AS(SessionSnapshot::load(path), std::runtime_error);
