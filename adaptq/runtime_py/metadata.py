@@ -25,6 +25,10 @@ class ModelConfig:
     adaptq_bits: int = 4        # 2, 3, or 4
     adaptq_capacity: int = 4096
 
+    # HuggingFace Transformers security setting. Remote repository code is
+    # disabled by default and must be explicitly trusted by the caller.
+    allow_remote_code: bool = False
+
     def __post_init__(self):
         if not self.tokenizer_path:
             self.tokenizer_path = self.model_path
