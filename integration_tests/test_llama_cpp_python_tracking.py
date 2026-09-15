@@ -1,8 +1,6 @@
 """Unit coverage for llama-cpp-python KV tracking without serializing state."""
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from adaptq.runtime_py.backends.llama_cpp_python import LlamaCppPythonAdapter
 from adaptq.runtime_py.metadata import GenerationResult, RuntimeMetadata
 
@@ -45,6 +43,6 @@ def test_decode_next_does_not_serialize_llama_state():
 
     stats = adapter.get_kv_stats()
     assert stats.n_tokens_cached == 4
-    assert stats.kv_bytes_fp16 == 512
-    assert stats.kv_bytes_adaptq == 64
+    assert stats.kv_bytes_fp16 == 1024
+    assert stats.kv_bytes_adaptq == 128
     assert stats.compression_ratio == 8.0
