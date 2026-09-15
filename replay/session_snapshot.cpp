@@ -87,6 +87,17 @@ static void require_remaining(std::istream &in,
                                  field + " exceeds remaining snapshot data");
 }
 
+constexpr uint64_t kMaxMetadataContainerBytes = 64ull * 1024ull * 1024ull;
+
+static void require_metadata_container_bytes(int32_t count,
+                                             uint64_t element_size,
+                                             const char *field) {
+    const uint64_t bytes = checked_count_bytes(count, element_size, field);
+    if (bytes > kMaxMetadataContainerBytes)
+        throw std::runtime_error(std::string("SessionSnapshot::load: ") +
+                                 field + " allocation exceeds safety limit");
+}
+
 /* =========================================================================
  * capture()
  * ========================================================================= */
@@ -304,6 +315,8 @@ SessionSnapshot SessionSnapshot::load(const std::string &path) {
         static_cast<uint64_t>(n_heads_total) != expected_heads)
         throw std::runtime_error("SessionSnapshot::load: inconsistent head count");
 
+    require_metadata_container_bytes(n_heads_total, sizeof(HeadSnapshot), "head count");
+
     constexpr uint64_t kMinHeadBlockBytes = 32;
     const uint64_t head_block_count = static_cast<uint64_t>(n_heads_total);
     if (head_block_count > remaining_bytes(f, file_size) / kMinHeadBlockBytes)
@@ -371,6 +384,7 @@ SessionSnapshot SessionSnapshot::load(const std::string &path) {
     if (snap.flags_ & 1u) {
         int n_entries = read_i32(f);
         const uint64_t min_entry_bytes = checked_count_bytes(n_entries, 12u, "token_log entries");
+        require_metadata_container_bytes(n_entries, sizeof(SnapshotTokenEntry), "token_log entries");
         if (min_entry_bytes > remaining_bytes(f, file_size))
             throw std::runtime_error("SessionSnapshot::load: token_log entries exceed remaining snapshot data");
         snap.token_log_.resize(n_entries);
@@ -398,5 +412,3 @@ SessionSnapshot SessionSnapshot::load(const std::string &path) {
 }
 
 } /* namespace adaptq */
-
-
