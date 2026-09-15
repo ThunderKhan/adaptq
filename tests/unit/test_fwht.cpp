@@ -73,16 +73,16 @@ TEST_CASE("gen_rademacher differs across seeds", "[fwht]") {
 /* ---- Round-trip: fwht_inverse(fwht_forward(x)) == x ------------------- */
 static void check_roundtrip(int dim, uint64_t vec_seed, uint64_t d_seed) {
     int padded = next_pow2(dim);
-    std::vector<int8_t> D(padded);
-    gen_rademacher(D.data(), padded, d_seed);
+    std::vector<int8_t> D(dim + 1, 0x7F);
+    gen_rademacher(D.data(), dim, d_seed);
 
-    auto orig = random_vec(padded, vec_seed);
+    auto orig = random_vec(dim, vec_seed);
     std::vector<float> x = orig;
 
-    fwht_forward(x.data(), D.data(), padded);
-    fwht_inverse(x.data(), D.data(), padded);
+    fwht_forward(x.data(), D.data(), dim);
+    fwht_inverse(x.data(), D.data(), dim);
 
-    double err = mse(x.data(), orig.data(), padded);
+    double err = mse(x.data(), orig.data(), dim);
     CAPTURE(dim, padded, err);
     REQUIRE(err < 1e-10);
 }
@@ -94,7 +94,7 @@ TEST_CASE("FWHT round-trip MSE < 1e-10 for common head dims", "[fwht]") {
     }
 }
 
-TEST_CASE("FWHT round-trip for non-power-of-2 dims (padding path)", "[fwht]") {
+TEST_CASE("FWHT round-trip for non-power-of-2 dims with D sized to d", "[fwht]") {
     for (int dim : {3, 5, 7, 10, 15, 33, 100, 200}) {
         check_roundtrip(dim, 99ULL, 0xCAFE);
     }
