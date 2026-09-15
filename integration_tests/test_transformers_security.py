@@ -9,17 +9,14 @@ import pytest
 from adaptq.runtime_py.metadata import ModelConfig
 
 
-pytestmark = pytest.mark.filterwarnings("ignore")
-
-
 def test_model_config_disables_remote_code_by_default():
     cfg = ModelConfig(model_path="example/model")
     assert cfg.allow_remote_code is False
 
 
 def test_transformers_load_model_defaults_to_safe_remote_code_policy(monkeypatch):
-    torch = pytest.importorskip("torch")
-    transformers = pytest.importorskip("transformers")
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
     import adaptq.runtime_py.backends.transformers_hf as hf_backend
 
     tokenizer = SimpleNamespace(eos_token_id=2)
@@ -50,8 +47,8 @@ def test_transformers_load_model_defaults_to_safe_remote_code_policy(monkeypatch
 
 
 def test_transformers_load_model_allows_explicit_remote_code_opt_in(monkeypatch):
-    torch = pytest.importorskip("torch")
-    transformers = pytest.importorskip("transformers")
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
     import adaptq.runtime_py.backends.transformers_hf as hf_backend
 
     tokenizer = SimpleNamespace(eos_token_id=2)
