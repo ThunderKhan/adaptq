@@ -119,3 +119,33 @@ TEST_CASE("FWHT is linear: forward(a+b) == forward(a)+forward(b)", "[fwht]") {
     for (int i = 0; i < padded; ++i) fapb[i] = fa[i] + fb[i];
     REQUIRE(mse(apb.data(), fapb.data(), padded) < 1e-10);
 }
+
+TEST_CASE("next_pow2 boundary and overflow safety", "[fwht][safety]") {
+    REQUIRE(next_pow2(0) == 1);
+    REQUIRE(next_pow2(-10) == 1);
+    REQUIRE(next_pow2(1 << 30) == (1 << 30));
+    // Verify no hang or infinite loop on values exceeding 1 << 30
+    REQUIRE(next_pow2((1 << 30) + 1) == (1 << 30));
+    REQUIRE(next_pow2(2147483647) == (1 << 30));
+}
+
+TEST_CASE("FWHT safety on null, empty, or out-of-bounds input", "[fwht][safety]") {
+    float buf[16] = {};
+    int8_t D[16] = {};
+    // Should safely return without crashing
+    fwht_forward(nullptr, D, 16);
+    fwht_forward(buf, nullptr, 16);
+    fwht_forward(buf, D, 0);
+    fwht_forward(buf, D, -5);
+
+    fwht_inverse(nullptr, D, 16);
+    fwht_inverse(buf, nullptr, 16);
+    fwht_inverse(buf, D, 0);
+    fwht_inverse(buf, D, -5);
+
+    // Dimension exceeding pad buffer throws std::invalid_argument
+    std::vector<float> big_x(1025, 1.0f);
+    std::vector<int8_t> big_D(2048, 1);
+    REQUIRE_THROWS_AS(fwht_forward(big_x.data(), big_D.data(), 1025), std::invalid_argument);
+    REQUIRE_THROWS_AS(fwht_inverse(big_x.data(), big_D.data(), 1025), std::invalid_argument);
+}

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Iterator, List, Optional
+from typing import Generator, Iterator, List, Optional
 
 from ..base import IRuntimeAdapter
 from ..metadata import (
@@ -228,6 +228,110 @@ class OllamaAdapter(IRuntimeAdapter):
 
         self._last_result = result
         return result
+
+    def generate_streaming(  # type: ignore[override]
+        self,
+        prompt: str,
+        *,
+        max_new_tokens: int = 128,
+        session_cfg: Optional[SessionConfig] = None,
+    ) -> Generator[str, None, None]:
+        """
+        Streaming generation via the Ollama REST API.
+
+        Overrides the base-class ``generate_streaming()`` which is broken for
+        Ollama: the default implementation calls ``decode_next()``, which
+        always returns ``None`` for this backend (Ollama does not expose
+        token-by-token decoding over REST).  This override talks directly to
+        the ``/api/generate`` endpoint with ``"stream": true`` and yields each
+        text fragment as Ollama emits it.
+
+        Usage::
+
+            adapter = create_adapter("ollama")
+            adapter.load_model(ModelConfig(model_path="tinyllama"))
+            for chunk in adapter.generate_streaming("Tell me a joke:"):
+                print(chunk, end="", flush=True)
+
+        After the generator is fully consumed, ``adapter.generation_result()``
+        and ``adapter.get_kv_stats()`` will return the final metrics from the
+        completed generation.
+
+        Args:
+            prompt: Input text prompt.
+            max_new_tokens: Maximum number of tokens to generate.
+            session_cfg: Optional :class:`SessionConfig` override.
+
+        Yields:
+            str: Text fragments as they are streamed from Ollama.
+        """
+        cfg = session_cfg or SessionConfig(prompt=prompt, max_new_tokens=max_new_tokens)
+        result = GenerationResult()
+        t0 = time.perf_counter()
+
+        if not self.begin_session(cfg):
+            result.error = self._error
+            self._last_result = result
+            return
+
+        try:
+            payload = {
+                "model": self._model_name,
+                "prompt": prompt,
+                "stream": True,
+                "options": {
+                    "num_predict": max_new_tokens,
+                    "temperature": self._model_cfg.temperature if self._model_cfg else 0.8,
+                    "seed": self._model_cfg.seed if self._model_cfg else 42,
+                },
+            }
+
+            eval_count = 0
+            prompt_eval_count = 0
+
+            with requests.post(
+                f"{self._base_url}/api/generate",
+                json=payload,
+                stream=True,
+                timeout=120,
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    fragment = chunk.get("response", "")
+                    if fragment:
+                        result.text += fragment
+                        yield fragment
+
+                    if chunk.get("done"):
+                        eval_count = chunk.get("eval_count", 0)
+                        prompt_eval_count = chunk.get("prompt_eval_count", 0)
+                        break
+
+            t1 = time.perf_counter()
+            result.n_generated_tokens = eval_count
+            result.n_prompt_tokens = prompt_eval_count
+            result.wall_time_ms = (t1 - t0) * 1000.0
+            if result.wall_time_ms > 0:
+                result.tokens_per_sec = eval_count / (result.wall_time_ms / 1000.0)
+            result.kv_stats = KVStats(
+                kv_bytes_fp16=eval_count * 32 * 128 * 2 * 2,  # placeholder
+                kv_bytes_adaptq=0,
+                n_tokens_cached=eval_count,
+            )
+
+        except Exception as e:
+            result.error = str(e)
+        finally:
+            self.end_session()
+
+        self._last_result = result
 
     def get_kv_stats(self) -> KVStats:
         return self._last_result.kv_stats if self._last_result else KVStats()

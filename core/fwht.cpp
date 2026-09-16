@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <stdexcept>
 
 // Thread-local pad buffer so fwht_forward/inverse never heap-allocate.
 // Must be >= max next_pow2(head_dim) used by any context in this process.
@@ -11,6 +12,7 @@ static thread_local float tl_pad_buf[ADAPTQ_FWHT_PAD_BUF];
 
 int next_pow2(int n) {
     if (n <= 1) return 1;
+    if (n > (1 << 30)) return (1 << 30);
     int p = 1;
     while (p < n) p <<= 1;
     return p;
@@ -83,12 +85,15 @@ static void fwht_raw_unrolled(float* x, int n) {
 }
 
 void fwht_forward(float* x, const int8_t* D, int d) {
+    if (!x || !D || d <= 0) return;
     int p = next_pow2(d);
     float* work = x;
     if (p != d) {
-        assert(p <= ADAPTQ_FWHT_PAD_BUF &&
-               "FWHT padded dimension exceeds tl_pad_buf. "
-               "Increase ADAPTQ_FWHT_PAD_BUF in fwht.cpp.");
+        if (p > ADAPTQ_FWHT_PAD_BUF) {
+            throw std::invalid_argument(
+                "FWHT padded dimension exceeds tl_pad_buf. "
+                "Increase ADAPTQ_FWHT_PAD_BUF in fwht.cpp.");
+        }
         memcpy(tl_pad_buf, x, d * sizeof(float));
         memset(tl_pad_buf + d, 0, (p - d) * sizeof(float));
         work = tl_pad_buf;
@@ -98,13 +103,16 @@ void fwht_forward(float* x, const int8_t* D, int d) {
 }
 
 void fwht_inverse(float* x, const int8_t* D, int d) {
+    if (!x || !D || d <= 0) return;
     // Inverse of (1/sqrt(p))*H*D*x  is  D*(1/sqrt(p))*H*y
     int p = next_pow2(d);
     float* work = x;
     if (p != d) {
-        assert(p <= ADAPTQ_FWHT_PAD_BUF &&
-               "FWHT padded dimension exceeds tl_pad_buf. "
-               "Increase ADAPTQ_FWHT_PAD_BUF in fwht.cpp.");
+        if (p > ADAPTQ_FWHT_PAD_BUF) {
+            throw std::invalid_argument(
+                "FWHT padded dimension exceeds tl_pad_buf. "
+                "Increase ADAPTQ_FWHT_PAD_BUF in fwht.cpp.");
+        }
         memcpy(tl_pad_buf, x, d * sizeof(float));
         memset(tl_pad_buf + d, 0, (p - d) * sizeof(float));
         work = tl_pad_buf;

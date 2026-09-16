@@ -114,6 +114,47 @@ TEST_CASE("adaptq_create accepts all supported quantization bit widths", "[api]"
     }
 }
 
+TEST_CASE("single-head API rejects null handles and buffers without crashing", "[api][security]") {
+    float k[128] = {}, v[128] = {}, q[128] = {}, out[128] = {};
+
+    REQUIRE(adaptq_compute(nullptr, q, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_compute: null handle") != std::string::npos);
+
+    REQUIRE(adaptq_compute(nullptr, nullptr, nullptr) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_compute: null handle") != std::string::npos);
+
+    adaptq_ctx_t h = adaptq_create(128, 4, 16, 1, 0.f, 0);
+    REQUIRE(h != nullptr);
+
+    adaptq_append(h, nullptr, v, 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_append: null key") != std::string::npos);
+
+    adaptq_append(h, k, nullptr, 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_append: null val") != std::string::npos);
+
+    REQUIRE(adaptq_compute(h, nullptr, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_compute: null query") != std::string::npos);
+
+    REQUIRE(adaptq_compute(h, q, nullptr) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_compute: null out") != std::string::npos);
+
+    REQUIRE(adaptq_compute_batch(h, nullptr, 1, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_compute_batch: null queries") != std::string::npos);
+
+    REQUIRE(adaptq_compute_batch(h, q, 1, nullptr) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_compute_batch: null outs") != std::string::npos);
+
+    REQUIRE(adaptq_compute_batch(h, nullptr, 0, nullptr) == 0);
+
+    adaptq_reset(nullptr);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_reset: null handle") != std::string::npos);
+    REQUIRE(adaptq_kv_bytes(nullptr) == 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_kv_bytes: null handle") != std::string::npos);
+
+    adaptq_destroy(nullptr);
+    adaptq_destroy(h);
+}
+
 /* ---- Multi-head -------------------------------------------------------- */
 
 TEST_CASE("adaptq_mha_create / destroy", "[api][mha]") {
@@ -194,6 +235,53 @@ TEST_CASE("adaptq_mha_append: exact upper bound head_idx sets error", "[api][mha
     adaptq_mha_destroy(mha);
 }
 
+TEST_CASE("multi-head API rejects null handles and buffers without crashing", "[api][mha][security]") {
+    float k[64] = {}, v[64] = {}, q[64] = {}, out[64] = {};
+
+    REQUIRE(adaptq_mha_compute(nullptr, 0, q, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_compute: null handle") != std::string::npos);
+
+    adaptq_mha_append(nullptr, 0, k, v, 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_append: null handle") != std::string::npos);
+
+    REQUIRE(adaptq_mha_compute_batch(nullptr, 0, q, 1, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_compute_batch: null handle") != std::string::npos);
+
+    adaptq_mha_reset(nullptr);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_reset: null handle") != std::string::npos);
+
+    REQUIRE(adaptq_mha_total_kv_bytes(nullptr) == 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_total_kv_bytes: null handle") != std::string::npos);
+
+    adaptq_mha_destroy(nullptr);
+
+    adaptq_mha_t mha = adaptq_mha_create(2, 64, 4, 4, 0, 0.f, 0);
+    INFO(adaptq_last_error());
+    REQUIRE(mha != nullptr);
+
+    adaptq_mha_append(mha, 0, nullptr, v, 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_append: null key") != std::string::npos);
+
+    adaptq_mha_append(mha, 0, k, nullptr, 0);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_append: null val") != std::string::npos);
+
+    REQUIRE(adaptq_mha_compute(mha, 0, nullptr, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_compute: null query") != std::string::npos);
+
+    REQUIRE(adaptq_mha_compute(mha, 0, q, nullptr) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_compute: null out") != std::string::npos);
+
+    REQUIRE(adaptq_mha_compute_batch(mha, 0, nullptr, 1, out) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_compute_batch: null queries") != std::string::npos);
+
+    REQUIRE(adaptq_mha_compute_batch(mha, 0, q, 1, nullptr) == -1);
+    REQUIRE(std::string(adaptq_last_error()).find("adaptq_mha_compute_batch: null outs") != std::string::npos);
+
+    REQUIRE(adaptq_mha_compute_batch(mha, 0, nullptr, 0, nullptr) == 0);
+
+    adaptq_mha_destroy(mha);
+}
+
 /* ---- Feature flags + version ------------------------------------------ */
 
 TEST_CASE("adaptq_version returns non-empty string", "[api]") {
@@ -206,4 +294,90 @@ TEST_CASE("adaptq_features returns valid bitmask", "[api]") {
     unsigned f = adaptq_features();
     REQUIRE((f & ADAPTQ_FEAT_HYBRID)   != 0);
     REQUIRE((f & ADAPTQ_FEAT_SPARSE_V) != 0);
+}
+
+/* ---- Context Limits (Issue #22) --------------------------------------- */
+
+TEST_CASE("adaptq context handles sizes around and above 65536 tokens", "[api][limits]") {
+    // We test 65535, 65536, 65537, and 100000.
+    // We create a single cache with capacity 100005 to cover everything.
+    adaptq_ctx_t h = adaptq_create(64, 4, 100005, 42, 0.f, 0);
+    REQUIRE(h != nullptr);
+
+    float k[64] = {}, v[64] = {}, q[64] = {}, out[64];
+    fill_vec(k, 64, 0.1f);
+    fill_vec(v, 64, 0.1f);
+    fill_vec(q, 64, 0.1f);
+
+    int test_sizes[] = { 65535, 65536, 65537, 100000 };
+    int current_size = 0;
+
+    for (int target : test_sizes) {
+        // Append tokens until we reach the target size
+        while (current_size < target) {
+            adaptq_append(h, k, v, current_size);
+            current_size++;
+        }
+        
+        // Compute should not assert/crash and return exactly the target size
+        int n = adaptq_compute(h, q, out);
+        REQUIRE(n == target);
+    }
+
+    adaptq_destroy(h);
+}
+
+/* ---- Boundary Conditions (Issue #16) ---------------------------------- */
+
+TEST_CASE("Max-Lloyd codebooks handle boundary conditions and outlier vectors without crashing", "[api][security][boundary]") {
+    adaptq_ctx_t h = adaptq_create(64, 4, 128, 42, 0.f, 0);
+    REQUIRE(h != nullptr);
+
+    float q[64] = {}, out[64] = {};
+    float k_zeros[64] = {}, v_zeros[64] = {};
+    float k_nans[64], v_nans[64];
+    float k_huge[64], v_huge[64];
+    
+    for (int i = 0; i < 64; ++i) {
+        k_nans[i] = std::nanf("");
+        v_nans[i] = std::nanf("");
+        k_huge[i] = 1e38f;
+        v_huge[i] = -1e38f;
+    }
+
+    adaptq_append(h, k_zeros, v_zeros, 0);
+    adaptq_append(h, k_nans, v_nans, 1);
+    adaptq_append(h, k_huge, v_huge, 2);
+
+    int n = adaptq_compute(h, q, out);
+    REQUIRE(n == 3);
+
+    adaptq_destroy(h);
+}
+
+/* ---- MHA Lifecycle and Null Safety (Issue #60) ------------------------ */
+TEST_CASE("MHA handles creation failure rollback and null safety cleanly", "[api][mha][safety]") {
+    // Zero or negative heads
+    REQUIRE(adaptq_mha_create(0, 64, 4, 128, 42, 0.f, 0) == nullptr);
+    REQUIRE(adaptq_mha_create(-2, 64, 4, 128, 42, 0.f, 0) == nullptr);
+
+    // Invalid bit width
+    REQUIRE(adaptq_mha_create(4, 64, 5, 128, 42, 0.f, 0) == nullptr);
+
+    // Valid creation and basic inspection
+    adaptq_mha_t mha = adaptq_mha_create(2, 64, 4, 128, 42, 0.f, 0);
+    REQUIRE(mha != nullptr);
+    REQUIRE(adaptq_mha_total_kv_bytes(mha) == 0);
+
+    // Out of range head index checks
+    float k[64] = {}, v[64] = {}, q[64] = {}, out[64] = {};
+    adaptq_mha_append(mha, -1, k, v, 0);
+    adaptq_mha_append(mha, 2, k, v, 0);
+    REQUIRE(adaptq_mha_compute(mha, -1, q, out) == -1);
+    REQUIRE(adaptq_mha_compute(mha, 2, q, out) == -1);
+
+    adaptq_mha_reset(mha);
+    adaptq_mha_destroy(mha);
+    // Double destroy on nullptr should be no-op
+    adaptq_mha_destroy(nullptr);
 }
