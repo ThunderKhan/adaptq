@@ -33,6 +33,13 @@ public:
     }
 
     void init(int capacity, int max_slot_bytes) override {
+        for (int i = 0; i < n_slabs_; ++i) {
+            if (slabs_[i].data) {
+                aligned_free(slabs_[i].data);
+                slabs_[i].data = nullptr;
+            }
+            slabs_[i] = Slab{};
+        }
         capacity_       = capacity;
         max_slot_bytes_ = max_slot_bytes;
         n_slabs_        = 0;

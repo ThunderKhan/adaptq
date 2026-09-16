@@ -181,6 +181,26 @@ TEST_CASE("SegmentedSlabStorage: free_slot tracks actual data bytes", "[storage]
     REQUIRE(st.bytes_used() == 8);
 }
 
+TEST_CASE("SegmentedSlabStorage: reinitialization safely frees previous slabs", "[storage][segmented]") {
+    SegmentedSlabStorage st;
+    st.init(8, 8);
+    auto d1 = make_data(8, 0x11);
+    auto d2 = make_data(8, 0x22);
+    st.write(d1.data(), 8, 1.f, 0x01);
+    st.write(d2.data(), 8, 2.f, 0x02);
+    REQUIRE(st.bytes_used() == 16);
+
+    // Re-initialize: should safely free earlier slabs without leaking or corrupting
+    st.init(16, 16);
+    REQUIRE(st.bytes_used() == 0);
+    auto d3 = make_data(16, 0x33);
+    StorageSlot slot = st.write(d3.data(), 16, 3.f, 0x03);
+    CompressResult r = st.read(slot);
+    REQUIRE(r.data[0] == 0x33);
+    REQUIRE(r.format_tag == 0x03);
+    REQUIRE(st.bytes_used() == 16);
+}
+
 /* ======================================================================
  * IStorageBackend contract template
  * ==================================================================== */
