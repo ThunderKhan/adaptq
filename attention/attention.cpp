@@ -105,13 +105,10 @@ static inline __m256 exp8_avx2(__m256 x) {
 
   x = _mm256_max_ps(exp_lo, _mm256_min_ps(exp_hi, x));
 
-  __m256 fx = _mm256_add_ps(_mm256_mul_ps(x, log2ef), half);
-  __m256i emm0 = _mm256_cvttps_epi32(fx);
-  __m256 tmp = _mm256_cvtepi32_ps(emm0);
-  __m256 mask = _mm256_cmp_ps(tmp, fx, _CMP_GT_OQ);
-  fx = _mm256_sub_ps(tmp, _mm256_and_ps(mask, one));
+  __m256 fx = _mm256_fmadd_ps(x, log2ef, half);
+  fx = _mm256_floor_ps(fx);
 
-  tmp = _mm256_mul_ps(fx, c1);
+  __m256 tmp = _mm256_mul_ps(fx, c1);
   x = _mm256_sub_ps(x, tmp);
   tmp = _mm256_mul_ps(fx, c2);
   x = _mm256_sub_ps(x, tmp);
@@ -126,6 +123,7 @@ static inline __m256 exp8_avx2(__m256 x) {
   y = _mm256_fmadd_ps(y, z, x);
   y = _mm256_add_ps(y, one);
 
+  __m256i emm0 = _mm256_cvttps_epi32(fx);
   emm0 = _mm256_add_epi32(emm0, _mm256_set1_epi32(0x7f));
   emm0 = _mm256_slli_epi32(emm0, 23);
   const __m256 pow2n = _mm256_castsi256_ps(emm0);
