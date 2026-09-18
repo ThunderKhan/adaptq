@@ -463,7 +463,6 @@ static void compute_avx2(const float *qr, float *acc, const float *cb,
                          float isp, int *slots, int n, int pb, int padded,
                          float v_mass_thresh, float *logits) {
   const __m256 cl = _mm256_loadu_ps(cb), ch = _mm256_loadu_ps(cb + 8);
-  float mx = -1e30f;
   int i = 0;
   for (; i + 3 < n; i += 4) {
     int s0 = slots[i], s1 = slots[i + 1], s2 = slots[i + 2], s3 = slots[i + 3];
@@ -483,28 +482,17 @@ static void compute_avx2(const float *qr, float *acc, const float *cb,
                      kb + (size_t)s2 * pb, kb + (size_t)s3 * pb, cl, ch, padded,
                      d);
     logits[i] = d[0] * attn_s * kscale[s0];
-    if (logits[i] > mx)
-      mx = logits[i];
     logits[i + 1] = d[1] * attn_s * kscale[s1];
-    if (logits[i + 1] > mx)
-      mx = logits[i + 1];
     logits[i + 2] = d[2] * attn_s * kscale[s2];
-    if (logits[i + 2] > mx)
-      mx = logits[i + 2];
     logits[i + 3] = d[3] * attn_s * kscale[s3];
-    if (logits[i + 3] > mx)
-      mx = logits[i + 3];
   }
   for (; i < n; ++i) {
     int s = slots[i];
     ADAPTQ_PREFETCH(vb + (size_t)s * pb);
     logits[i] = kdot1<BITS>(qr, kb + (size_t)s * pb, cl, ch, padded) * attn_s *
                 kscale[s];
-    if (logits[i] > mx)
-      mx = logits[i];
   }
 
-  (void)mx;
   softmax_avx2(logits, n);
 
   memset(acc, 0, padded * sizeof(float));
