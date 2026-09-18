@@ -191,22 +191,46 @@ static void vaccum1(float *__restrict acc, const uint8_t *__restrict vp,
 
 struct AttentionWorkspace {
   std::vector<float> logits;
-  std::vector<int> slots;
   std::vector<int> ord;
   std::vector<float> q_rot;
   std::vector<float> v_accum;
 
   void ensure_capacity(int n, int padded) {
-    if (logits.size() < (size_t)n) {
+    logits.resize(n);
+    ord.resize(n);
+    q_rot.resize(padded);
+    v_accum.resize(padded);
+  }
+
+  void trim_excess(int n, int padded) {
+    const size_t token_limit = static_cast<size_t>(n) * 2U + 1024U;
+    const size_t vector_limit = static_cast<size_t>(padded) * 2U;
+
+    if (logits.capacity() > token_limit) {
+      std::vector<float>().swap(logits);
       logits.resize(n);
-      slots.resize(n);
+    }
+    if (ord.capacity() > token_limit) {
+      std::vector<int>().swap(ord);
       ord.resize(n);
     }
-    if (q_rot.size() < (size_t)padded) {
+    if (q_rot.capacity() > vector_limit) {
+      std::vector<float>().swap(q_rot);
       q_rot.resize(padded);
+    }
+    if (v_accum.capacity() > vector_limit) {
+      std::vector<float>().swap(v_accum);
       v_accum.resize(padded);
     }
   }
+};
+
+struct WorkspaceTrimGuard {
+  AttentionWorkspace &workspace;
+  int n;
+  int padded;
+
+  ~WorkspaceTrimGuard() { workspace.trim_excess(n, padded); }
 };
 
 static thread_local AttentionWorkspace tl_ws;
@@ -460,17 +484,25 @@ template <int BITS>
 static void compute_avx2(const float *qr, float *acc, const float *cb,
                          const uint8_t *kb, const uint8_t *vb,
                          const float *kscale, const float *vscale, float attn_s,
-                         float isp, int *slots, int n, int pb, int padded,
-                         float v_mass_thresh, float *logits) {
+                         float isp, int first_slot, int cap, int n, int pb,
+                         int padded, float v_mass_thresh, float *logits) {
   const __m256 cl = _mm256_loadu_ps(cb), ch = _mm256_loadu_ps(cb + 8);
   int i = 0;
   for (; i + 3 < n; i += 4) {
-    int s0 = slots[i], s1 = slots[i + 1], s2 = slots[i + 2], s3 = slots[i + 3];
+    int s0 = first_slot + i, s1 = s0 + 1, s2 = s0 + 2, s3 = s0 + 3;
+    if (s3 >= cap) s3 -= cap;
+    if (s2 >= cap) s2 -= cap;
+    if (s1 >= cap) s1 -= cap;
     if (i + 7 < n) {
-      ADAPTQ_PREFETCH(kb + (size_t)slots[i + 4] * pb);
-      ADAPTQ_PREFETCH(kb + (size_t)slots[i + 5] * pb);
-      ADAPTQ_PREFETCH(kb + (size_t)slots[i + 6] * pb);
-      ADAPTQ_PREFETCH(kb + (size_t)slots[i + 7] * pb);
+      int s4 = s0 + 4, s5 = s0 + 5, s6 = s0 + 6, s7 = s0 + 7;
+      if (s7 >= cap) s7 -= cap;
+      if (s6 >= cap) s6 -= cap;
+      if (s5 >= cap) s5 -= cap;
+      if (s4 >= cap) s4 -= cap;
+      ADAPTQ_PREFETCH(kb + (size_t)s4 * pb);
+      ADAPTQ_PREFETCH(kb + (size_t)s5 * pb);
+      ADAPTQ_PREFETCH(kb + (size_t)s6 * pb);
+      ADAPTQ_PREFETCH(kb + (size_t)s7 * pb);
     }
     ADAPTQ_PREFETCH(vb + (size_t)s0 * pb);
     ADAPTQ_PREFETCH(vb + (size_t)s1 * pb);
@@ -487,7 +519,8 @@ static void compute_avx2(const float *qr, float *acc, const float *cb,
     logits[i + 3] = d[3] * attn_s * kscale[s3];
   }
   for (; i < n; ++i) {
-    int s = slots[i];
+    int s = first_slot + i;
+    if (s >= cap) s -= cap;
     ADAPTQ_PREFETCH(vb + (size_t)s * pb);
     logits[i] = kdot1<BITS>(qr, kb + (size_t)s * pb, cl, ch, padded) * attn_s *
                 kscale[s];
@@ -500,8 +533,10 @@ static void compute_avx2(const float *qr, float *acc, const float *cb,
   if (v_mass_thresh <= 0.f) {
     int ii = 0;
     for (; ii + 3 < n; ii += 4) {
-      int s0 = slots[ii], s1 = slots[ii + 1], s2 = slots[ii + 2],
-          s3 = slots[ii + 3];
+      int s0 = first_slot + ii, s1 = s0 + 1, s2 = s0 + 2, s3 = s0 + 3;
+      if (s3 >= cap) s3 -= cap;
+      if (s2 >= cap) s2 -= cap;
+      if (s1 >= cap) s1 -= cap;
       vaccum4<BITS>(
           acc, vb + (size_t)s0 * pb, vb + (size_t)s1 * pb, vb + (size_t)s2 * pb,
           vb + (size_t)s3 * pb, logits[ii] * vscale[s0] * isp,
@@ -509,7 +544,8 @@ static void compute_avx2(const float *qr, float *acc, const float *cb,
           logits[ii + 3] * vscale[s3] * isp, cl, ch, padded);
     }
     for (; ii < n; ++ii) {
-      int s = slots[ii];
+      int s = first_slot + ii;
+      if (s >= cap) s -= cap;
       vaccum1<BITS>(acc, vb + (size_t)s * pb, logits[ii] * vscale[s] * isp, cl,
                     ch, padded);
     }
@@ -523,7 +559,12 @@ static void compute_avx2(const float *qr, float *acc, const float *cb,
     int ii = 0;
     for (; ii + 3 < n && mass < v_mass_thresh; ii += 4) {
       int i0 = ord[ii], i1 = ord[ii + 1], i2 = ord[ii + 2], i3 = ord[ii + 3];
-      int s0 = slots[i0], s1 = slots[i1], s2 = slots[i2], s3 = slots[i3];
+      int s0 = first_slot + i0, s1 = first_slot + i1;
+      int s2 = first_slot + i2, s3 = first_slot + i3;
+      if (s0 >= cap) s0 -= cap;
+      if (s1 >= cap) s1 -= cap;
+      if (s2 >= cap) s2 -= cap;
+      if (s3 >= cap) s3 -= cap;
       vaccum4<BITS>(
           acc, vb + (size_t)s0 * pb, vb + (size_t)s1 * pb, vb + (size_t)s2 * pb,
           vb + (size_t)s3 * pb, logits[i0] * vscale[s0] * isp,
@@ -532,7 +573,8 @@ static void compute_avx2(const float *qr, float *acc, const float *cb,
       mass += logits[i0] + logits[i1] + logits[i2] + logits[i3];
     }
     for (; ii < n && mass < v_mass_thresh; ++ii) {
-      int s = slots[ord[ii]];
+      int s = first_slot + ord[ii];
+      if (s >= cap) s -= cap;
       float w = logits[ord[ii]];
       vaccum1<BITS>(acc, vb + (size_t)s * pb, w * vscale[s] * isp, cl, ch,
                     padded);
@@ -558,7 +600,7 @@ int AttentionHead::compute(const float *q, float *out) const {
   // hybrid_thresh tokens. Zero-overhead check: one integer compare.
   if (hybrid_thresh > 0 && n <= hybrid_thresh &&
       (int)raw_kv.size() == n * 2 * dim) {
-    tl_ws.ensure_capacity(n, padded);
+    tl_ws.ensure_capacity(n, padded);  WorkspaceTrimGuard trim_guard{tl_ws, n, padded};
     float *logits = tl_ws.logits.data();
     const float scale = 1.f / sqrtf((float)dim);
     float mx = -1e30f;
@@ -619,9 +661,7 @@ int AttentionHead::compute(const float *q, float *out) const {
   float attn_s = 1.f / (sqrtf((float)dim) * (float)padded);
   float isp = 1.f / sqrtf((float)padded);
   float *logits = tl_ws.logits.data();
-  int *slots = tl_ws.slots.data();
-  for (int i = 0; i < n; ++i)
-    slots[i] = (kv_buf.head - n + cap + i) % cap;
+  const int first_slot = (kv_buf.head - n + cap) % cap;
 
 
 
@@ -634,22 +674,22 @@ int AttentionHead::compute(const float *q, float *out) const {
   if (use_avx2) {
   if (bits == 4) {
     compute_avx2<4>(qr, acc, cb, kb, vb, kv_buf.k_scale.data(),
-                    kv_buf.v_scale.data(), attn_s, isp, slots, n, pb, padded,
-                    v_mass_thresh, logits);
+                    kv_buf.v_scale.data(), attn_s, isp, first_slot, cap, n, pb,
+                    padded, v_mass_thresh, logits);
     fwht_inverse(acc, quant.D.data(), padded);
     memcpy(out, acc, dim * sizeof(float));
     return n;
   } else if (bits == 3) {
     compute_avx2<3>(qr, acc, cb, kb, vb, kv_buf.k_scale.data(),
-                    kv_buf.v_scale.data(), attn_s, isp, slots, n, pb, padded,
-                    v_mass_thresh, logits);
+                    kv_buf.v_scale.data(), attn_s, isp, first_slot, cap, n, pb,
+                    padded, v_mass_thresh, logits);
     fwht_inverse(acc, quant.D.data(), padded);
     memcpy(out, acc, dim * sizeof(float));
     return n;
   } else if (bits == 2) {
     compute_avx2<2>(qr, acc, cb, kb, vb, kv_buf.k_scale.data(),
-                    kv_buf.v_scale.data(), attn_s, isp, slots, n, pb, padded,
-                    v_mass_thresh, logits);
+                    kv_buf.v_scale.data(), attn_s, isp, first_slot, cap, n, pb,
+                    padded, v_mass_thresh, logits);
     fwht_inverse(acc, quant.D.data(), padded);
     memcpy(out, acc, dim * sizeof(float));
     return n;
@@ -660,9 +700,11 @@ int AttentionHead::compute(const float *q, float *out) const {
   // Scalar 2/3-bit path
   memset(acc, 0, padded * sizeof(float));
   for (int i = 0; i < n; ++i) {
-    int s = slots[i];
+    int s = first_slot + i;
+    if (s >= cap) s -= cap;
     if (i + 4 < n) {
-      int ps = slots[i + 4];
+      int ps = first_slot + i + 4;
+      if (ps >= cap) ps -= cap;
       ADAPTQ_PREFETCH(kb + (size_t)ps * pb);
       ADAPTQ_PREFETCH(vb + (size_t)ps * pb);
     }
@@ -672,7 +714,8 @@ int AttentionHead::compute(const float *q, float *out) const {
   softmax(logits, n);
   int cb_sz = 1 << bits;
   for (int i = 0; i < n; ++i) {
-    int s = slots[i];
+    int s = first_slot + i;
+    if (s >= cap) s -= cap;
     float ecb[16];
     float ew = logits[i] * kv_buf.v_scale[s] * isp;
     for (int k = 0; k < cb_sz; ++k)
