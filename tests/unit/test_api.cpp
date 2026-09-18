@@ -1,9 +1,12 @@
 /* Catch2 v3 — link against Catch2::Catch2WithMain */
 #include <catch2/catch_test_macros.hpp>
 #include "../../include/adaptq.h"
-#include <cstring>
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
 static void set_test_env(const char *name, const char *value) {
