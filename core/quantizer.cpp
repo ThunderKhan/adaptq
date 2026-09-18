@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <stdexcept>
 
 // Maximum padded dimension supported by thread-local scratch buffers.
 // padded = next_pow2(head_dim). If head_dim > 512, padded > 1024 at 2-bit.
@@ -18,17 +19,16 @@ static thread_local float   tl_float_buf[ADAPTQ_TL_BUF_FLOATS];
 static thread_local uint8_t tl_idx_buf[ADAPTQ_TL_BUF_BYTES];
 
 void Quantizer::init(int d, uint64_t seed) {
+  if (d <= 0) {
+    throw std::invalid_argument("head_dim must be positive");
+  }
   dim = d;
   padded = next_pow2(d);
-  // Fail loudly at context-creation time rather than silently corrupting
-  // memory deep in the quantize hot path. Increase ADAPTQ_TL_BUF_FLOATS
-  // and ADAPTQ_TL_BUF_BYTES in this file if you need larger head dimensions.
-  assert(padded <= ADAPTQ_TL_BUF_FLOATS &&
-         "head_dim too large: padded > ADAPTQ_TL_BUF_FLOATS. "
-         "Increase ADAPTQ_TL_BUF_FLOATS in quantizer.cpp.");
-  assert(padded <= ADAPTQ_TL_BUF_BYTES &&
-         "head_dim too large: padded > ADAPTQ_TL_BUF_BYTES. "
-         "Increase ADAPTQ_TL_BUF_BYTES in quantizer.cpp.");
+  if (padded > ADAPTQ_TL_BUF_FLOATS || padded > ADAPTQ_TL_BUF_BYTES) {
+    throw std::invalid_argument(
+        "head_dim too large: padded dimension exceeds ADAPTQ_TL_BUF scratch buffers. "
+        "Increase ADAPTQ_TL_BUF_FLOATS and ADAPTQ_TL_BUF_BYTES in quantizer.cpp.");
+  }
   D.resize(padded);
   gen_rademacher(D.data(), padded, seed);
 }
@@ -207,6 +207,8 @@ void pack_indices(const uint8_t *indices, int d, int bits, uint8_t *dst) {
   case 4:
     pack4(indices, d, dst);
     return;
+  default:
+    throw std::invalid_argument("Unsupported bit width in pack_indices (expected 2, 3, or 4)");
   }
 }
 void unpack_indices(const uint8_t *src, int d, int bits, uint8_t *indices) {
@@ -220,5 +222,7 @@ void unpack_indices(const uint8_t *src, int d, int bits, uint8_t *indices) {
   case 4:
     unpack4(src, d, indices);
     return;
+  default:
+    throw std::invalid_argument("Unsupported bit width in unpack_indices (expected 2, 3, or 4)");
   }
 }

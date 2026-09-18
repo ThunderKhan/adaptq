@@ -16,9 +16,11 @@
  *   adaptq replay <snapshot.aqss>
  *     [--strategy har_fixed|fp_passthrough]
  *     [--from-token N]
+ *     [--capacity N]
  *     [--metrics]
  *     [--output <file>]
  *     [--format json|csv|md|tex]
+ *     [--summary-json]
  *
  * Default:
  *   Replays all tokens using the same strategy configuration as the snapshot.
@@ -139,29 +141,42 @@ int cmd_replay(int argc, char **argv) {
                      "  --from-token N\n"
                      "  --metrics\n"
                      "  --output <file>\n"
-                     "  --format json|csv|md|tex\n";
+                     "  --format json|csv|md|tex\n"
+                     "  --summary-json\n";
         return 1;
     }
 
     std::string snap_path    = argv[0];
     std::string strategy_override;
     std::string output_path;
-    std::string format       = "json";
-    int         from_token   = -1;
-    bool        collect_m    = false;
+    std::string format            = "json";
+    int         from_token        = -1;
+    int         capacity_override = -1;
+    bool        collect_m         = false;
+    bool        summary_json      = false;
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--strategy") == 0 && i + 1 < argc) {
             strategy_override = argv[++i];
         } else if (strcmp(argv[i], "--from-token") == 0 && i + 1 < argc) {
             from_token = std::atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--capacity") == 0 && i + 1 < argc) {
+            capacity_override = std::atoi(argv[++i]);
         } else if (strcmp(argv[i], "--metrics") == 0) {
             collect_m = true;
         } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
             output_path = argv[++i];
         } else if (strcmp(argv[i], "--format") == 0 && i + 1 < argc) {
             format = argv[++i];
+        } else if (strcmp(argv[i], "--summary-json") == 0) {
+            summary_json = true;
         }
+    }
+
+    if (format != "json" && format != "csv" && format != "md" && format != "tex") {
+        std::cerr << "ERROR: unsupported output format '" << format
+                  << "' (expected json, csv, md, or tex)\n";
+        return 1;
     }
 
     /* Load snapshot. */
@@ -185,6 +200,11 @@ int cmd_replay(int argc, char **argv) {
     cfg.dim         = snap.dim();
     cfg.bits        = snap.bits();
     cfg.log_tokens  = false;
+    if (capacity_override > 0) {
+        cfg.capacity = capacity_override;
+    } else {
+        cfg.capacity = std::max(cfg.capacity, snap.n_tokens());
+    }
 
     RuntimeContext ctx;
     if (strategy_override.empty()) {
@@ -198,7 +218,6 @@ int cmd_replay(int argc, char **argv) {
         }
         /* Use internal make_contiguous via default init then re-init with factory. */
         ctx.init(cfg, sfn, make_contiguous);
-
     }
 
     ReplayEngine engine(collect_m);
@@ -206,7 +225,7 @@ int cmd_replay(int argc, char **argv) {
 
     try {
         if (from_token >= 0) {
-            /* Branch mode — warm up then stop. */
+            /* Branch mode — warm-up then stop. */
             engine.branch(snap, ctx, from_token);
             report.n_tokens_replayed = from_token;
             report.strategy_name     = ctx.get_strategy(0, 0)
@@ -242,6 +261,12 @@ int cmd_replay(int argc, char **argv) {
         format_tex(report, snap, *pout);
     else
         format_json(report, snap, *pout);
+
+    /* The Python replay API requests the human-readable artifact in the
+     * requested format while also needing the structured result object. Keep
+     * the two channels separate so the replay itself happens only once. */
+    if (summary_json)
+        format_json(report, snap, std::cout);
 
     return 0;
 }

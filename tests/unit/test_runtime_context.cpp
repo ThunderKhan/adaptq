@@ -52,6 +52,17 @@ TEST_CASE("RuntimeContext: init does not throw", "[runtime]") {
     REQUIRE_NOTHROW(ctx.init(cfg));
 }
 
+TEST_CASE("RuntimeContext: rejects invalid configuration before allocation", "[runtime][security]") {
+    RuntimeContext ctx;
+    for (RuntimeContextConfig cfg : {
+        make_cfg(0, 1), make_cfg(1, 0), make_cfg(1, 1, 0),
+        make_cfg(1, 1, 64, 1), make_cfg(1, 1, 64, 5),
+        make_cfg(1, 1, 64, 4, 0)
+    }) {
+        REQUIRE_THROWS_AS(ctx.init(cfg), std::invalid_argument);
+    }
+}
+
 TEST_CASE("RuntimeContext: get_strategy / get_storage return non-null", "[runtime]") {
     RuntimeContextConfig cfg = make_cfg(2, 4, 128, 4, 64);
     RuntimeContext ctx;
@@ -62,6 +73,14 @@ TEST_CASE("RuntimeContext: get_strategy / get_storage return non-null", "[runtim
             REQUIRE(ctx.get_storage(l, h)  != nullptr);
         }
     }
+}
+
+TEST_CASE("RuntimeContext: rejects invalid layer and head indices", "[runtime][security]") {
+    RuntimeContext ctx;
+    ctx.init(make_cfg(2, 2));
+    REQUIRE_THROWS_AS(ctx.get_strategy(-1, 0), std::out_of_range);
+    REQUIRE_THROWS_AS(ctx.get_storage(0, 2), std::out_of_range);
+    REQUIRE_THROWS_AS(ctx.compute(2, 0, nullptr, nullptr), std::out_of_range);
 }
 
 TEST_CASE("RuntimeContext: append increases storage usage", "[runtime]") {
@@ -195,7 +214,50 @@ TEST_CASE("RuntimeContext: token log is populated when log_tokens=true", "[runti
         rand_vec(v.data(), 64, (unsigned)(t + 200));
         ctx.append(0, 0, k.data(), v.data());
     }
-
     REQUIRE(ctx.token_log().size() == 5u);
     REQUIRE(ctx.token_log_data().size() == 5u * 2u * 64u);
 }
+
+/* ---- Context Limits (Issue #22) --------------------------------------- */
+
+TEST_CASE("RuntimeContext: HARFixedStrategy handles sizes around and above 65536 tokens", "[runtime][limits]") {
+    RuntimeContextConfig cfg = make_cfg(1, 1, 64, 4, 100005);
+    RuntimeContext ctx;
+    ctx.init(cfg); // uses har_fixed by default
+
+    std::vector<float> k(64, 0.1f), v(64, 0.1f), q(64, 0.1f), out(64, 0.f);
+
+    int test_sizes[] = { 65535, 65536, 65537, 100000 };
+    int current_size = 0;
+
+    for (int target : test_sizes) {
+        while (current_size < target) {
+            ctx.append(0, 0, k.data(), v.data());
+            current_size++;
+        }
+        
+        ComputeMetrics m = ctx.compute(0, 0, q.data(), out.data());
+        REQUIRE(m.n_tokens_used == target);
+    }
+}
+
+TEST_CASE("RuntimeContext: fp_passthrough records pre-softmax logit_max and logit_min", "[runtime][fp32][metrics]") {
+    RuntimeContextConfig cfg = make_cfg(1, 1, 64, 4, 32);
+    RuntimeContext ctx;
+    StrategyFactory sfn = strategy_factory_by_name("fp_passthrough");
+    REQUIRE(sfn != nullptr);
+    ctx.init(cfg, sfn, []() -> IStorageBackend * {
+        return adaptq::make_contiguous();
+    });
+
+    std::vector<float> k_pos(64, 1.0f), k_neg(64, -1.0f), v(64, 0.5f), q(64, 1.0f), out(64);
+    ctx.append(0, 0, k_pos.data(), v.data());
+    ctx.append(0, 0, k_neg.data(), v.data());
+
+    ComputeMetrics m = ctx.compute(0, 0, q.data(), out.data());
+    // Q dot K_pos = 64 / sqrt(64) = 8.0f
+    // Q dot K_neg = -64 / sqrt(64) = -8.0f
+    REQUIRE(std::abs(m.logit_max - 8.0f) < 1e-4f);
+    REQUIRE(std::abs(m.logit_min - (-8.0f)) < 1e-4f);
+}
+

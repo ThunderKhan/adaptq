@@ -67,8 +67,7 @@ class LlamaCppPythonAdapter(IRuntimeAdapter):
 
     This adapter hooks into llama-cpp-python's generate() loop:
     - Runs the model token-by-token
-    - After each prefill/decode step, reads KV via llama_state_get_data()
-      to measure the compressed vs FP16 footprint
+    - After each prefill/decode step, estimates the KV footprint from model metadata
     - Feeds K/V through AdapTQ Engine for compression tracking
 
     Usage:
@@ -233,7 +232,7 @@ class LlamaCppPythonAdapter(IRuntimeAdapter):
             self._last_result.n_generated_tokens += 1
             self._last_result.token_ids = self._generated_ids
 
-            # Update AdapTQ tracking (approximation via state size measurement)
+            # Update AdapTQ tracking using metadata-derived KV estimates.
             self._update_adaptq_tracking()
 
             return tok
@@ -243,16 +242,12 @@ class LlamaCppPythonAdapter(IRuntimeAdapter):
 
     def _update_adaptq_tracking(self):
         """
-        Read KV usage from the model context and update AdapTQ tracking.
-        Uses llama_state_get_data() size as FP16 KV proxy.
+        Estimate KV usage from model metadata and update AdapTQ tracking.
+        The llama.cpp context state is not serialized for per-token metrics.
         """
         if self._model is None:
             return
         try:
-            # State size approximation — actual KV is embedded in state blob
-            state_size = self._model.save_state().llama_state_size \
-                         if hasattr(self._model.save_state(), "llama_state_size") \
-                         else 0
             n_tokens = len(self._prompt_tokens) + len(self._generated_ids)
             m = self._meta
             if m.n_heads > 0 and m.head_dim > 0 and m.n_layers > 0:

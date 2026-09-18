@@ -24,6 +24,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from adaptq.runtime_py import create_adapter
 from adaptq.runtime_py.metadata import ModelConfig
 
@@ -49,7 +60,7 @@ def check_ollama_running(base_url: str = "http://localhost:11434") -> bool:
         return False
 
 
-def run_demo(model: str, max_tokens: int, prompt: str, base_url: str):
+def run_demo(model: str, max_tokens: int, prompt: str, base_url: str, stream: bool = False):
     print(BANNER)
 
     section("1. Checking Ollama availability")
@@ -90,17 +101,26 @@ def run_demo(model: str, max_tokens: int, prompt: str, base_url: str):
     section("3. Generating via REST API")
     print(f"  Prompt: {prompt!r}")
     print(f"  Max tokens: {max_tokens}")
+    print(f"  Mode: {'Streaming' if stream else 'Batch'}")
     print()
 
-    result = adapter.generate(prompt, max_new_tokens=max_tokens)
+    if stream:
+        print("  Streaming response:")
+        print("  ", end="", flush=True)
+        for chunk in adapter.generate_streaming(prompt, max_new_tokens=max_tokens):
+            print(chunk, end="", flush=True)
+        print("\n")
+        result = adapter.generation_result()
+    else:
+        result = adapter.generate(prompt, max_new_tokens=max_tokens)
+        if result.error:
+            print(f"  ✗ Generation failed: {result.error}")
+            sys.exit(1)
 
-    if result.error:
-        print(f"  ✗ Generation failed: {result.error}")
-        sys.exit(1)
+        print("  Generated text:")
+        print(f"  {result.text!r}")
+        print()
 
-    print("  Generated text:")
-    print(f"  {result.text!r}")
-    print()
     print("  Stats:")
     print(f"    Tokens: {result.n_generated_tokens} generated, "
           f"{result.n_prompt_tokens} prompt")
@@ -149,8 +169,10 @@ def main():
                    help="Prompt text")
     p.add_argument("--base-url", default="http://localhost:11434",
                    help="Ollama server base URL")
+    p.add_argument("--stream", action="store_true",
+                   help="Stream output token-by-token using generate_streaming()")
     args = p.parse_args()
-    run_demo(args.model, args.tokens, args.prompt, args.base_url)
+    run_demo(args.model, args.tokens, args.prompt, args.base_url, stream=args.stream)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 /* -------------------------------------------------------------------------
@@ -69,6 +70,9 @@ const char **strategy_names(int *out_count) {
  * ========================================================================= */
 
 static int next_pow2_rt(int n) {
+    if (n <= 1) return 1;
+    if (n > (1 << 30)) return 1 << 30;
+
     int p = 1;
     while (p < n) p <<= 1;
     return p;
@@ -85,6 +89,13 @@ void RuntimeContext::init(const RuntimeContextConfig &cfg) {
 void RuntimeContext::init(const RuntimeContextConfig &cfg,
                           StrategyFactory             strategy_fn,
                           StorageFactory              storage_fn) {
+    if (cfg.n_layers <= 0 || cfg.n_heads <= 0 || cfg.dim <= 0 ||
+        cfg.bits < 2 || cfg.bits > 4 || cfg.capacity <= 0 ||
+        cfg.dim > (1 << 30) ||
+        cfg.n_layers > std::numeric_limits<int>::max() / cfg.n_heads ||
+        !strategy_fn || !storage_fn) {
+        throw std::invalid_argument("RuntimeContext::init: invalid configuration");
+    }
     cfg_      = cfg;
     token_pos_ = 0;
     token_log_.clear();
@@ -101,13 +112,13 @@ void RuntimeContext::init(const RuntimeContextConfig &cfg,
      * For HAR 4-bit: (padded * 4 + 7) / 8 = padded / 2 bytes.
      * For FP32:      dim * 4 bytes.
      * Use the larger bound to keep storage backend generic.  */
-    int padded       = next_pow2_rt(cfg.dim);
+    int padded       = next_pow2_rt(cfg_.dim);
     int slot_bytes_q = (padded * cfg.bits + 7) / 8;
-    int slot_bytes_f = cfg.dim * (int)sizeof(float);
+    int slot_bytes_f = cfg_.dim * (int)sizeof(float);
     int slot_bytes   = std::max(slot_bytes_q, slot_bytes_f);
 
     HeadConfig hcfg;
-    hcfg.dim      = cfg.dim;
+    hcfg.dim      = cfg_.dim;
     hcfg.bits     = cfg.bits;
     hcfg.capacity = cfg.capacity;
     hcfg.v_mass   = cfg.v_mass;
@@ -238,24 +249,21 @@ void RuntimeContext::append(int          layer,
     /* Compress K. */
     comp->compress(k_vec, cfg_.dim, true, ctx);
 
-    /* Compress V — update cache_size to reflect K already stored. */
+    /* Compress V. The storage backend maintains independent K/V regions,
+     * so K and V remain paired even when the FIFO rings wrap. */
     int n = cache_sizes_[idx];
-    /* V slots start at offset n in the storage ring. Storage write()
-     * increments its own internal head — K and V alternate, so the
-     * slot layout is [K0, K1, …, Kn, V0, V1, …, Vn] in a contiguous slab.
-     * ContiguousSlabStorage doesn't differentiate K/V — both appends just
-     * use the next slot. The read-back in compute() uses [i] for K and
-     * [n + i] for V (with n = number of K/V pairs). */
     comp->compress(v_vec, cfg_.dim, false, ctx);
 
-    /* Eviction decision (after both K and V are stored). */
-    ctx.cache_size = n + 1;
+    /* Eviction decision (after both K and V are stored). The storage ring
+     * performs the physical overwrite; this callback remains available to
+     * policies for observability. */
+    ctx.cache_size = std::min(n + 1, cfg_.capacity);
     EvictionDecision d = evic->on_append(ctx);
     if (d.evict && d.evict_slot >= 0) {
         storages_[idx]->free_slot((StorageSlot)d.evict_slot);
     }
 
-    cache_sizes_[idx] = n + 1;
+    cache_sizes_[idx] = std::min(n + 1, cfg_.capacity);
 
     /* Log K/V FP32 vectors if snapshot logging is enabled. */
     if (cfg_.log_tokens) {
@@ -358,19 +366,19 @@ ComputeMetrics RuntimeContext::compute(int          layer,
             if (logits_[i] > mx) mx = logits_[i];
         }
 
+        m.logit_max = mx;
+        m.logit_min = *std::min_element(logits_.begin(), logits_.begin() + n);
+
         /* Softmax. */
         float sv = 0.f;
         for (int i = 0; i < n; ++i) { logits_[i] = expf(logits_[i] - mx); sv += logits_[i]; }
         float inv_s = 1.f / sv;
         for (int i = 0; i < n; ++i) logits_[i] *= inv_s;
 
-        m.logit_max = *std::max_element(logits_.begin(), logits_.begin() + n);
-        m.logit_min = *std::min_element(logits_.begin(), logits_.begin() + n);
-
         /* V accumulation. */
         v_acc_.assign(cfg_.dim, 0.f);
         for (int i = 0; i < n; ++i) {
-            CompressResult vr = st->read((StorageSlot)(n + i));
+            CompressResult vr = st->read((StorageSlot)(ctx.cache_capacity + i));
             const float *v = reinterpret_cast<const float *>(vr.data);
             float w = logits_[i];
             for (int d = 0; d < cfg_.dim; ++d) v_acc_[d] += w * v[d];
@@ -436,3 +444,6 @@ ComputeMetrics RuntimeContext::compute(int          layer,
 }
 
 } /* namespace adaptq */
+
+
+
