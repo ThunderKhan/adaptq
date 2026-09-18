@@ -238,5 +238,14 @@ if(ADAPTQ_BUILD_TESTS)
   target_link_libraries(test_replay_engine PRIVATE adapTQ_runtime adapTQ_core Catch2::Catch2WithMain)
   catch_discover_tests(test_replay_engine)
 
+
+  # --- test_kernel_selector (Issue #7 capability, fallback, and differential kernels) ---
+  add_executable(test_kernel_selector
+      tests/unit/test_kernel_selector.cpp)
+  target_include_directories(test_kernel_selector PRIVATE
+      include storage strategies kernels runtime replay)
+  target_link_libraries(test_kernel_selector PRIVATE adapTQ_runtime adapTQ_core Catch2::Catch2WithMain)
+  catch_discover_tests(test_kernel_selector)
+
   message(STATUS "Test targets enabled (V1: 38 tests + V2: runtime/snapshot/replay)")
 endif()
