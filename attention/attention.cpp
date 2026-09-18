@@ -87,6 +87,51 @@ static inline float hsum8(__m256 v) {
   return _mm_cvtss_f32(_mm_hadd_ps(lo, lo));
 }
 
+/* Fast AVX2 exp approximation adapted from the standard minimax/cephes form. */
+static inline __m256 exp8_avx2(__m256 x) {
+  const __m256 one = _mm256_set1_ps(1.0f);
+  const __m256 exp_hi = _mm256_set1_ps(88.3762626647949f);
+  const __m256 exp_lo = _mm256_set1_ps(-88.3762626647949f);
+  const __m256 log2ef = _mm256_set1_ps(1.44269504088896341f);
+  const __m256 half = _mm256_set1_ps(0.5f);
+  const __m256 c1 = _mm256_set1_ps(-6.93359375e-1f);
+  const __m256 c2 = _mm256_set1_ps(2.12194440e-4f);
+  const __m256 p0 = _mm256_set1_ps(1.9875691500e-4f);
+  const __m256 p1 = _mm256_set1_ps(1.3981999507e-3f);
+  const __m256 p2 = _mm256_set1_ps(8.3334519073e-3f);
+  const __m256 p3 = _mm256_set1_ps(4.1665795894e-2f);
+  const __m256 p4 = _mm256_set1_ps(1.6666665459e-1f);
+  const __m256 p5 = _mm256_set1_ps(5.0000001201e-1f);
+
+  x = _mm256_max_ps(exp_lo, _mm256_min_ps(exp_hi, x));
+
+  __m256 fx = _mm256_add_ps(_mm256_mul_ps(x, log2ef), half);
+  __m256i emm0 = _mm256_cvttps_epi32(fx);
+  __m256 tmp = _mm256_cvtepi32_ps(emm0);
+  __m256 mask = _mm256_cmp_ps(tmp, fx, _CMP_GT_OQ);
+  fx = _mm256_sub_ps(tmp, _mm256_and_ps(mask, one));
+
+  tmp = _mm256_mul_ps(fx, c1);
+  x = _mm256_sub_ps(x, tmp);
+  tmp = _mm256_mul_ps(fx, c2);
+  x = _mm256_sub_ps(x, tmp);
+
+  const __m256 z = _mm256_mul_ps(x, x);
+  __m256 y = p0;
+  y = _mm256_fmadd_ps(y, x, p1);
+  y = _mm256_fmadd_ps(y, x, p2);
+  y = _mm256_fmadd_ps(y, x, p3);
+  y = _mm256_fmadd_ps(y, x, p4);
+  y = _mm256_fmadd_ps(y, x, p5);
+  y = _mm256_fmadd_ps(y, z, x);
+  y = _mm256_add_ps(y, one);
+
+  emm0 = _mm256_add_epi32(emm0, _mm256_set1_epi32(0x7f));
+  emm0 = _mm256_slli_epi32(emm0, 23);
+  const __m256 pow2n = _mm256_castsi256_ps(emm0);
+  return _mm256_mul_ps(y, pow2n);
+}
+
 // ---------------------------------------------------------------------------
 // SINGLE-TOKEN K-dot: used for tail processing
 // ---------------------------------------------------------------------------
@@ -405,13 +450,22 @@ static void compute_avx2(const float *qr, float *acc, const float *cb,
       mx = logits[i];
   }
 
-  float sv = 0.f;
-  for (int j = 0; j < n; ++j) {
+  const __m256 mxv = _mm256_set1_ps(mx);
+  __m256 sumv = _mm256_setzero_ps();
+  int j = 0;
+  for (; j + 7 < n; j += 8) {
+    __m256 x = _mm256_loadu_ps(logits + j);
+    x = exp8_avx2(_mm256_sub_ps(x, mxv));
+    _mm256_storeu_ps(logits + j, x);
+    sumv = _mm256_add_ps(sumv, x);
+  }
+  float sv = hsum8(sumv);
+  for (; j < n; ++j) {
     logits[j] = expf(logits[j] - mx);
     sv += logits[j];
   }
   float inv = 1.f / sv;
-  for (int j = 0; j < n; ++j)
+  for (j = 0; j < n; ++j)
     logits[j] *= inv;
 
   memset(acc, 0, padded * sizeof(float));
