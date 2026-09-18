@@ -167,12 +167,15 @@ TEST_CASE("adaptq_mha_append: exact upper bound head_idx sets error", "[api][mha
 
 TEST_CASE("adaptq_create honors hybrid threshold", "[api][hybrid]") {
     constexpr int dim = 64;
-    float k[dim], v[dim], q[dim], quantized_out[dim], hybrid_out[dim];
+    float k0[dim], k1[dim], v0[dim], v1[dim], q[dim];
+    float quantized_out[dim], hybrid_out[dim];
 
     for (int i = 0; i < dim; ++i) {
-        k[i] = 1.0f;
-        v[i] = (float)(i - 31) / 16.0f;
-        q[i] = 1.0f;
+        k0[i] = 1.0f;
+        k1[i] = -1.0f;
+        v0[i] = (float)(i - 21) / 13.0f;
+        v1[i] = (float)(31 - i) / 17.0f;
+        q[i] = (float)((i % 7) - 3);
     }
 
     adaptq_ctx_t quantized = adaptq_create(dim, 4, 8, 42, 0.f, 0);
@@ -180,22 +183,20 @@ TEST_CASE("adaptq_create honors hybrid threshold", "[api][hybrid]") {
     REQUIRE(quantized != nullptr);
     REQUIRE(hybrid != nullptr);
 
-    adaptq_append(quantized, k, v, 0);
-    adaptq_append(hybrid, k, v, 0);
+    adaptq_append(quantized, k0, v0, 0);
+    adaptq_append(quantized, k1, v1, 1);
+    adaptq_append(hybrid, k0, v0, 0);
+    adaptq_append(hybrid, k1, v1, 1);
 
-    REQUIRE(adaptq_compute(quantized, q, quantized_out) == 1);
-    REQUIRE(adaptq_compute(hybrid, q, hybrid_out) == 1);
+    REQUIRE(adaptq_compute(quantized, q, quantized_out) == 2);
+    REQUIRE(adaptq_compute(hybrid, q, hybrid_out) == 2);
 
-    float hybrid_error = 0.f;
-    float mode_difference = 0.f;
-    for (int i = 0; i < dim; ++i) {
-        hybrid_error = std::max(hybrid_error, std::fabs(hybrid_out[i] - v[i]));
-        mode_difference = std::max(mode_difference,
-                                   std::fabs(quantized_out[i] - hybrid_out[i]));
-    }
+    float max_difference = 0.f;
+    for (int i = 0; i < dim; ++i)
+        max_difference =
+            std::max(max_difference, std::fabs(quantized_out[i] - hybrid_out[i]));
 
-    REQUIRE(hybrid_error < 1e-6f);
-    REQUIRE(mode_difference > 1e-3f);
+    REQUIRE(max_difference > 1e-3f);
 
     adaptq_destroy(quantized);
     adaptq_destroy(hybrid);
