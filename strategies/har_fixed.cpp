@@ -240,9 +240,9 @@ public:
         /* 3. K-dot + softmax */
         float mx = -1e30f;
         if (ctx.kernel) {
-            k_results.resize(n);
+            tl_ws.k_results.resize(n);
             for (int i = 0; i < n; ++i)
-                k_results[i] = ctx.storage->read((StorageSlot)slots[i]);
+                tl_ws.k_results[i] = ctx.storage->read((StorageSlot)slots[i]);
             ctx.kernel->kdot_batch(qr, k_results.data(), n, padded, bits, logits);
             for (int i = 0; i < n; ++i) {
                 logits[i] *= attn_scale;
@@ -270,14 +270,14 @@ public:
 
         if (ctx.kernel) {
             int count = 0;
-            v_results.resize(n);
-            v_weights.resize(n);
+            tl_ws.v_results.resize(n);
+            tl_ws.v_weights.resize(n);
             if (v_mass_ <= 0.f) {
                 count = n;
                 for (int i = 0; i < n; ++i) {
-                    v_results[i] = ctx.storage->read(
+                    tl_ws.v_results[i] = ctx.storage->read(
                         (StorageSlot)slots[i] + (StorageSlot)ctx.cache_capacity);
-                    v_weights[i] = logits[i] * isp;
+                    tl_ws.v_weights[i] = logits[i] * isp;
                 }
             } else {
                 /* Sparse-V: retain only tokens contributing to v_mass_. */
@@ -287,14 +287,14 @@ public:
                 float mass = 0.f;
                 while (count < n && mass < v_mass_) {
                     int selected = ord[count];
-                    v_results[count] = ctx.storage->read(
+                    tl_ws.v_results[count] = ctx.storage->read(
                         (StorageSlot)slots[selected] + (StorageSlot)ctx.cache_capacity);
-                    v_weights[count] = logits[selected] * isp;
+                    tl_ws.v_weights[count] = logits[selected] * isp;
                     mass += logits[selected];
                     ++count;
                 }
             }
-            ctx.kernel->vaccum_batch(acc, v_results.data(), v_weights.data(),
+            ctx.kernel->vaccum_batch(acc, tl_ws.v_results.data(), tl_ws.v_weights.data(),
                                      count, padded, bits);
         } else if (v_mass_ <= 0.f) {
             for (int i = 0; i < n; ++i) {
