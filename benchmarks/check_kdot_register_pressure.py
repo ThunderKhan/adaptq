@@ -15,7 +15,7 @@ from typing import Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "kernels" / "avx2" / "kdot_avx2.cpp"
-FUNCTION_RE = re.compile(r"\bkdot4_quad_avx2<([234])>\b")
+FUNCTION_RE = re.compile(r"\bkdot4_quad_avx2<([234])>")
 YMM_RE = re.compile(r"\bymm([0-9]+)\b")
 STACK_VECTOR_RE = re.compile(
     r"\bvmov[a-z0-9]*\b[^\n]*\(%(?:rsp|rbp)\)",
