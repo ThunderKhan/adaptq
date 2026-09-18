@@ -12,6 +12,11 @@
 #include <string>
 #include <vector>
 
+namespace adaptq {
+IKernelBackend *create_scalar_backend();
+IKernelBackend *create_avx2_backend();
+}
+
 namespace {
 
 struct Options {
