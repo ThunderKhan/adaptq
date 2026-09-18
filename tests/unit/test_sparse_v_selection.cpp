@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
-#include "../../include/adaptq/attention.h"
+#include "../../include/attention.h"
 #include "../../include/adaptq/kernel.h"
-#include "../../include/adaptq/fwht.h"
+#include "../../include/fwht.h"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
