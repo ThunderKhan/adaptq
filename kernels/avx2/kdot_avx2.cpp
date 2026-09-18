@@ -163,9 +163,15 @@ static inline __m256 fwht_pairwise_avx2(__m256 values) {
     const __m256 swapped = _mm256_permutevar8x32_ps(values, swap_idx);
     const __m256 sum = _mm256_add_ps(values, swapped);
     const __m256 diff = _mm256_sub_ps(values, swapped);
-    const __m256 lo = _mm256_unpacklo_ps(sum, diff);
-    const __m256 hi = _mm256_unpackhi_ps(sum, diff);
-    return _mm256_permute2f128_ps(lo, hi, 0x20);
+    const __m128 sum_lo = _mm256_castps256_ps128(sum);
+    const __m128 sum_hi = _mm256_extractf128_ps(sum, 1);
+    const __m128 diff_lo = _mm256_castps256_ps128(diff);
+    const __m128 diff_hi = _mm256_extractf128_ps(diff, 1);
+    const __m128 sum_pairs = _mm_shuffle_ps(sum_lo, sum_hi, _MM_SHUFFLE(2, 0, 2, 0));
+    const __m128 diff_pairs = _mm_shuffle_ps(diff_lo, diff_hi, _MM_SHUFFLE(2, 0, 2, 0));
+    const __m128 out_lo = _mm_unpacklo_ps(sum_pairs, diff_pairs);
+    const __m128 out_hi = _mm_unpackhi_ps(sum_pairs, diff_pairs);
+    return _mm256_set_m128(out_hi, out_lo);
 }
 
 static inline __m256 fwht_signs_avx2(const int8_t *D, int offset) {
