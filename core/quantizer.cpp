@@ -210,7 +210,7 @@ void Quantizer::dequantize(const QuantizedVec &q, float *out) const {
   float *buf = tl_float_buf;
 #if (defined(__GNUC__) || defined(__clang__)) && \
     (defined(__x86_64__) || defined(__i386__))
-  if (__builtin_cpu_supports("avx2") && d >= 8) {
+  if (__builtin_cpu_supports("avx2") && d >= 8 && q.bits >= 2 && q.bits <= 4) {
     if (q.bits == 4)
       dequantize_avx2<4>(q.data.data(), d, inv_sq, cb, buf);
     else if (q.bits == 3)
@@ -253,7 +253,7 @@ void Quantizer::dequantize_raw(const uint8_t *packed, float scale, int padded_d,
   float *buf = tl_float_buf;
 #if (defined(__GNUC__) || defined(__clang__)) && \
     (defined(__x86_64__) || defined(__i386__))
-  if (__builtin_cpu_supports("avx2") && padded_d >= 8) {
+  if (__builtin_cpu_supports("avx2") && padded_d >= 8 && bits_arg >= 2 && bits_arg <= 4) {
     if (bits_arg == 4)
       dequantize_avx2<4>(packed, padded_d, inv_sq, cb, buf);
     else if (bits_arg == 3)
