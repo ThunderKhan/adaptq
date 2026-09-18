@@ -1,6 +1,5 @@
 #include "../include/adaptq/kernel.h"
-#include <cstdlib>
-#include <cstring>
+#include "../include/adaptq/backend_selection.h"
 
 #if (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86))
 #define ADAPTQ_X86_OR_X64 1
@@ -19,27 +18,6 @@ namespace adaptq {
 
 IKernelBackend *create_scalar_backend();
 IKernelBackend *create_avx2_backend();
-
-bool is_scalar_forced() {
-    const char *disable_avx2 = std::getenv("ADAPTQ_DISABLE_AVX2");
-    if (disable_avx2 && (std::strcmp(disable_avx2, "1") == 0 ||
-                         std::strcmp(disable_avx2, "true") == 0 ||
-                         std::strcmp(disable_avx2, "TRUE") == 0)) {
-        return true;
-    }
-    const char *force_scalar = std::getenv("ADAPTQ_FORCE_SCALAR");
-    if (force_scalar && (std::strcmp(force_scalar, "1") == 0 ||
-                         std::strcmp(force_scalar, "true") == 0 ||
-                         std::strcmp(force_scalar, "TRUE") == 0)) {
-        return true;
-    }
-    const char *backend = std::getenv("ADAPTQ_BACKEND");
-    if (backend && (std::strcmp(backend, "scalar") == 0 ||
-                    std::strcmp(backend, "SCALAR") == 0)) {
-        return true;
-    }
-    return false;
-}
 
 bool cpu_supports_avx2() {
 #if ADAPTQ_X86_OR_X64
