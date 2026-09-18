@@ -600,7 +600,7 @@ int AttentionHead::compute(const float *q, float *out) const {
   // hybrid_thresh tokens. Zero-overhead check: one integer compare.
   if (hybrid_thresh > 0 && n <= hybrid_thresh &&
       (int)raw_kv.size() == n * 2 * dim) {
-    tl_ws.ensure_capacity(n, padded);  WorkspaceTrimGuard trim_guard{tl_ws, n, padded};
+    tl_ws.ensure_capacity(n, padded);
     float *logits = tl_ws.logits.data();
     const float scale = 1.f / sqrtf((float)dim);
     float mx = -1e30f;
@@ -634,6 +634,7 @@ int AttentionHead::compute(const float *q, float *out) const {
   // ---- End hybrid path ---------------------------------------------------
 
   tl_ws.ensure_capacity(n, padded);
+  WorkspaceTrimGuard trim_guard{tl_ws, n, padded};
 
   // Rotate query
   float *qr = tl_ws.q_rot.data();
