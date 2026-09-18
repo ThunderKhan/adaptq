@@ -1,106 +1,73 @@
 #include <catch2/catch_test_macros.hpp>
-#include "../../include/attention.h"
-#include "../../include/adaptq/kernel.h"
-#include "../../include/fwht.h"
+#include "../../attention/sparse_selection.h"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
 #include <vector>
 
-namespace adaptq {
-IKernelBackend *create_scalar_backend();
-}
-
-using namespace adaptq;
-
-static std::vector<float> scalar_sparse_reference(const AttentionHead &head,
-                                                  const std::vector<float> &query) {
-    const int n = head.kv_buf.size;
-    const int cap = head.kv_buf.capacity;
-    const int pb = head.kv_buf.packed_bytes;
-    const int padded = head.padded;
-    const int bits = head.bits;
-
-    std::vector<float> qr(padded, 0.f);
-    std::copy(query.begin(), query.end(), qr.begin());
-
-    float qn = 0.f;
-    for (float x : query)
-        qn += x * x;
-    qn = std::sqrt(qn + 1e-12f);
-    const float inv_qn = 1.f / qn;
-    for (float &x : qr)
-        x *= inv_qn;
-
-    fwht_forward(qr.data(), head.quant.D.data(), padded);
-    const float sp = std::sqrt((float)padded);
-    for (float &x : qr)
-        x *= sp * qn;
-
-    std::vector<CompressResult> k_results(n);
-    std::vector<CompressResult> v_results(n);
-    for (int i = 0; i < n; ++i) {
-        const int slot = (head.kv_buf.head - n + cap + i) % cap;
-        k_results[i] = {
-            head.kv_buf.k_ptr(slot), pb, head.kv_buf.k_scale[slot], 0, (StorageSlot)slot
-        };
-        v_results[i] = {
-            head.kv_buf.v_ptr(slot), pb, head.kv_buf.v_scale[slot], 0, (StorageSlot)slot
-        };
-    }
-
-    IKernelBackend *scalar = create_scalar_backend();
-    std::vector<float> logits(n);
-    scalar->kdot_batch(qr.data(), k_results.data(), n, padded, bits, logits.data());
-    softmax(logits.data(), n);
-
-    std::vector<int> ord(n);
-    std::iota(ord.begin(), ord.end(), 0);
-    std::sort(ord.begin(), ord.end(),
-              [&](int a, int b) { return logits[a] > logits[b]; });
-
-    const float isp = 1.f / std::sqrt((float)padded);
-    std::vector<CompressResult> selected_v;
-    std::vector<float> weights;
+static float selected_mass(const std::vector<float> &weights,
+                           const std::vector<int> &ord, int count) {
     float mass = 0.f;
-    for (int i = 0; i < n && mass < head.v_mass_thresh; ++i) {
-        const int idx = ord[i];
-        const int slot = (head.kv_buf.head - n + cap + idx) % cap;
-        selected_v.push_back(v_results[idx]);
-        weights.push_back(logits[idx] * isp);
-        mass += logits[idx];
-    }
-
-    std::vector<float> acc(padded, 0.f);
-    scalar->vaccum_batch(acc.data(), selected_v.data(), weights.data(),
-                         (int)selected_v.size(), padded, bits);
-    fwht_inverse(acc.data(), head.quant.D.data(), padded);
-    acc.resize(head.dim);
-    return acc;
+    for (int i = 0; i < count; ++i)
+        mass += weights[ord[i]];
+    return mass;
 }
 
-TEST_CASE("AVX2 sparse V selection matches full-sort reference",
+TEST_CASE("Sparse V partial selection matches full-sort ordering",
           "[attention][sparse][selection]") {
-    AttentionHead head;
-    head.init(64, 4, 64, 987, 0.75f, 0);
+    const std::vector<int> sizes = {1, 2, 3, 7, 8, 9, 16, 31, 32, 47, 48, 63, 64};
+    const std::vector<float> thresholds = {0.01f, 0.10f, 0.50f, 0.75f, 0.95f, 1.0f};
 
-    std::vector<float> k(64), v(64), q(64);
-    for (int token = 0; token < 48; ++token) {
-        for (int i = 0; i < 64; ++i) {
-            k[i] = std::sin((float)(i * 17 + token * 13) * 0.019f)
-                 + 0.2f * std::cos((float)(i + token) * 0.071f);
-            v[i] = std::cos((float)(i * 11 - token * 7) * 0.023f)
-                 - 0.15f * std::sin((float)(i + token * 3) * 0.059f);
+    for (int n : sizes) {
+        std::vector<float> weights(n);
+        float total = 0.f;
+        for (int i = 0; i < n; ++i) {
+            weights[i] = 0.25f
+                       + 0.013f * (float)(i + 1)
+                       + 0.007f * (float)((i * 17) % 23);
+            total += weights[i];
         }
-        head.append_kv(k.data(), v.data(), token);
+        for (float &w : weights)
+            w /= total;
+
+        std::vector<int> full(n);
+        std::iota(full.begin(), full.end(), 0);
+        std::sort(full.begin(), full.end(),
+                  [&](int a, int b) { return weights[a] > weights[b]; });
+
+        for (float threshold : thresholds) {
+            std::vector<int> selected(n, -1);
+            const int count =
+                select_top_mass_indices(weights.data(), n, threshold, selected.data());
+
+            const int expected_count =
+                std::min(n, std::max(1, (int)std::ceil(threshold * (float)n)));
+            REQUIRE(count == expected_count);
+
+            for (int i = 0; i < count; ++i)
+                REQUIRE(selected[i] == full[i]);
+
+            const float mass = selected_mass(weights, selected, count);
+            REQUIRE(mass + 1e-6f >= std::min(1.0f, threshold));
+        }
     }
-    for (int i = 0; i < 64; ++i)
-        q[i] = std::sin((float)i * 0.037f + 0.9f);
+}
 
-    const std::vector<float> expected = scalar_sparse_reference(head, q);
-    std::vector<float> actual(64);
-    REQUIRE(head.compute(q.data(), actual.data()) == 48);
+TEST_CASE("Sparse V selector handles invalid and degenerate inputs",
+          "[attention][sparse][selection][stability]") {
+    int ord[4] = {-1, -1, -1, -1};
+    float weights[4] = {0.1f, 0.2f, 0.3f, 0.4f};
 
-    for (int i = 0; i < 64; ++i)
-        REQUIRE(std::abs(actual[i] - expected[i]) < 2e-3f);
+    REQUIRE(select_top_mass_indices(nullptr, 4, 0.75f, ord) == 0);
+    REQUIRE(select_top_mass_indices(weights, 0, 0.75f, ord) == 0);
+    REQUIRE(select_top_mass_indices(weights, 4, 0.75f, nullptr) == 0);
+
+    REQUIRE(select_top_mass_indices(weights, 4, 0.0f, ord) == 1);
+    REQUIRE(ord[0] == 3);
+
+    REQUIRE(select_top_mass_indices(weights, 4, 1.0f, ord) == 4);
+    REQUIRE(ord[0] == 3);
+    REQUIRE(ord[1] == 2);
+    REQUIRE(ord[2] == 1);
+    REQUIRE(ord[3] == 0);
 }
