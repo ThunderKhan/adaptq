@@ -126,7 +126,7 @@ static std::vector<uint8_t> reference_quantized_indices(
 }
 
 TEST_CASE("Quantizer SIMD staging matches scalar reference", "[quantizer][avx2]") {
-    for (int dim : {32, 64, 96, 128}) {
+    for (int dim : {9, 17, 33, 65, 127, 128}) {
         Quantizer q;
         q.init(dim, 0xA55A1234ULL ^ (uint64_t)dim);
 
