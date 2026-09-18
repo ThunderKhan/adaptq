@@ -11,6 +11,8 @@ namespace adaptq {
 IKernelBackend *create_scalar_backend();
 }
 
+using namespace adaptq;
+
 static std::vector<float> scalar_sparse_reference(const AttentionHead &head,
                                                   const std::vector<float> &query) {
     const int n = head.kv_buf.size;
