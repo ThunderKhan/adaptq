@@ -1,5 +1,6 @@
 /* Catch2 v3 — link against Catch2::Catch2WithMain */
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include "../../include/quantizer.h"
 #include "../../include/codebook.h"
 #include <cmath>
