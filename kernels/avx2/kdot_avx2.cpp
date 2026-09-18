@@ -187,9 +187,9 @@ public:
                 float d[4];
 #define KDOT4(B) kdot4_quad_avx2<B>(q_rot, \
     kr[i].data, kr[i+1].data, kr[i+2].data, kr[i+3].data, cl, ch, padded, d)
-            if      (bits==4) KDOT4(4);
-            else if (bits==3) KDOT4(3);
-            else              KDOT4(2);
+                if      (bits==4) KDOT4(4);
+                else if (bits==3) KDOT4(3);
+                else              KDOT4(2);
 #undef KDOT4
                 for (int k = 0; k < 4; ++k)
                     logits_out[i+k] = d[k] * kr[i+k].scale / (float)padded;
@@ -218,9 +218,9 @@ public:
         if (padded >= 16) {
             for (; i + 3 < N; i += 4) {
                 float e0 = weights[i]   * vr[i].scale;
-            float e1 = weights[i+1] * vr[i+1].scale;
-            float e2 = weights[i+2] * vr[i+2].scale;
-            float e3 = weights[i+3] * vr[i+3].scale;
+                float e1 = weights[i+1] * vr[i+1].scale;
+                float e2 = weights[i+2] * vr[i+2].scale;
+                float e3 = weights[i+3] * vr[i+3].scale;
 #define VACC4(B) vaccum4_avx2<B>(acc, \
     vr[i].data, vr[i+1].data, vr[i+2].data, vr[i+3].data, \
     e0, e1, e2, e3, cl, ch, padded)
