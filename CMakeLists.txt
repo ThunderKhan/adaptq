@@ -240,3 +240,16 @@ if(ADAPTQ_BUILD_TESTS)
 
   message(STATUS "Test targets enabled (V1: 38 tests + V2: runtime/snapshot/replay)")
 endif()
+
+
+# ---------------------------------------------------------------------------
+# Native benchmarks — opt-in, so normal builds remain unchanged
+# ---------------------------------------------------------------------------
+option(ADAPTQ_BUILD_BENCHMARKS "Build native kernel benchmark executables" OFF)
+
+if(ADAPTQ_BUILD_BENCHMARKS)
+  add_executable(bench_kernels_avx2
+      benchmarks/bench_kernels_avx2.cpp)
+  target_include_directories(bench_kernels_avx2 PRIVATE include storage)
+  target_link_libraries(bench_kernels_avx2 PRIVATE adapTQ_runtime adapTQ_core)
+endif()
