@@ -1,5 +1,6 @@
 #include "../include/attention.h"
 #include "../include/codebook.h"
+#include "sparse_selection.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -434,18 +435,8 @@ static void compute_avx2(const float *qr, float *acc, const float *cb,
     }
   } else {
     int *ord = tl_ws.ord.data();
-    for (int ii = 0; ii < n; ++ii)
-      ord[ii] = ii;
-
-    const int selected_count = std::min(
-        n, std::max(1, (int)std::ceil(v_mass_thresh * (float)n)));
-    if (selected_count < n) {
-      std::nth_element(
-          ord, ord + selected_count, ord + n,
-          [&](int a, int b) { return logits[a] > logits[b]; });
-      std::sort(ord, ord + selected_count,
-                [&](int a, int b) { return logits[a] > logits[b]; });
-    }
+    const int selected_count =
+        select_top_mass_indices(logits, n, v_mass_thresh, ord);
 
     float mass = 0.f;
     int ii = 0;
