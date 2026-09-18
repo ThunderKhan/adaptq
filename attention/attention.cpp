@@ -94,7 +94,7 @@ static inline __m256 exp8_avx2(__m256 x) {
   const __m256 exp_lo = _mm256_set1_ps(-88.3762626647949f);
   const __m256 log2ef = _mm256_set1_ps(1.44269504088896341f);
   const __m256 half = _mm256_set1_ps(0.5f);
-  const __m256 c1 = _mm256_set1_ps(-6.93359375e-1f);
+  const __m256 c1 = _mm256_set1_ps(6.93359375e-1f);
   const __m256 c2 = _mm256_set1_ps(2.12194440e-4f);
   const __m256 p0 = _mm256_set1_ps(1.9875691500e-4f);
   const __m256 p1 = _mm256_set1_ps(1.3981999507e-3f);
