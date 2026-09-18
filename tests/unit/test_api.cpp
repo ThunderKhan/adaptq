@@ -44,6 +44,42 @@ TEST_CASE("adaptq_append increases kv_bytes", "[api]") {
     adaptq_destroy(h);
 }
 
+TEST_CASE("adaptq_create honors hybrid threshold", "[api][hybrid]") {
+    constexpr int dim = 64;
+    float k[dim], v[dim], q[dim], quantized_out[dim], hybrid_out[dim];
+
+    for (int i = 0; i < dim; ++i) {
+        k[i] = 1.0f;
+        v[i] = (float)(i - 31) / 16.0f;
+        q[i] = 1.0f;
+    }
+
+    adaptq_ctx_t quantized = adaptq_create(dim, 4, 8, 42, 0.f, 0);
+    adaptq_ctx_t hybrid = adaptq_create(dim, 4, 8, 42, 0.f, 2);
+    REQUIRE(quantized != nullptr);
+    REQUIRE(hybrid != nullptr);
+
+    adaptq_append(quantized, k, v, 0);
+    adaptq_append(hybrid, k, v, 0);
+
+    REQUIRE(adaptq_compute(quantized, q, quantized_out) == 1);
+    REQUIRE(adaptq_compute(hybrid, q, hybrid_out) == 1);
+
+    float hybrid_error = 0.f;
+    float mode_difference = 0.f;
+    for (int i = 0; i < dim; ++i) {
+        hybrid_error = std::max(hybrid_error, std::fabs(hybrid_out[i] - v[i]));
+        mode_difference = std::max(mode_difference,
+                                   std::fabs(quantized_out[i] - hybrid_out[i]));
+    }
+
+    REQUIRE(hybrid_error < 1e-6f);
+    REQUIRE(mode_difference > 1e-3f);
+
+    adaptq_destroy(quantized);
+    adaptq_destroy(hybrid);
+}
+
 TEST_CASE("adaptq_compute returns active token count", "[api]") {
     adaptq_ctx_t h = adaptq_create(128, 4, 1024, 1, 0.f, 0);
     float k[128], v[128], q[128], out[128];
