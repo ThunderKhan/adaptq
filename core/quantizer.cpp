@@ -22,6 +22,8 @@ static thread_local uint8_t tl_idx_buf[ADAPTQ_TL_BUF_BYTES];
 #if (defined(__GNUC__) || defined(__clang__)) && \
     (defined(__x86_64__) || defined(__i386__))
 #include <immintrin.h>
+#pragma GCC push_options
+#pragma GCC target("avx2,fma")
 
 static inline float hsum8_quantize(__m256 value) {
   __m128 lo = _mm256_castps256_ps128(value);
@@ -33,99 +35,26 @@ static inline float hsum8_quantize(__m256 value) {
 
 static inline __m256i quantize8_avx2(__m256 value, const float *thresholds,
                                      int bits) {
-  const __m256 zero = _mm256_setzero_ps();
-  const __m256 nan_mask = _mm256_cmp_ps(value, value, _CMP_UNORD_Q);
-  __m256i index = _mm256_setzero_si256();
+  const int threshold_count = (1 << bits) - 1;
+  __m256i indices = _mm256_setzero_si256();
 
-  if (bits == 2) {
-    const __m256 high = _mm256_cmp_ps(
-        value, _mm256_set1_ps(thresholds[1]), _CMP_GE_OQ);
-    const __m256 stage =
-        _mm256_blendv_ps(_mm256_set1_ps(thresholds[0]),
-                         _mm256_set1_ps(thresholds[2]), high);
-    const __m256 low = _mm256_cmp_ps(value, stage, _CMP_GE_OQ);
-    index = _mm256_or_si256(
-        _mm256_and_si256(_mm256_castps_si256(high), _mm256_set1_epi32(2)),
-        _mm256_and_si256(_mm256_castps_si256(low), _mm256_set1_epi32(1)));
-  } else if (bits == 3) {
-    const __m256 high =
-        _mm256_cmp_ps(value, _mm256_set1_ps(thresholds[3]), _CMP_GE_OQ);
-    index = _mm256_and_si256(_mm256_castps_si256(high),
-                             _mm256_set1_epi32(4));
-
-    const __m256 stage =
-        _mm256_blendv_ps(_mm256_set1_ps(thresholds[1]),
-                         _mm256_set1_ps(thresholds[5]), high);
-    const __m256 middle = _mm256_cmp_ps(value, stage, _CMP_GE_OQ);
-    index = _mm256_or_si256(
-        index, _mm256_and_si256(_mm256_castps_si256(middle),
-                                _mm256_set1_epi32(2)));
-
-    const __m256i group = _mm256_srli_epi32(index, 1);
-    const __m256 stage_thresholds =
-        _mm256_setr_ps(thresholds[0], thresholds[2], thresholds[4],
-                       thresholds[6], 0.f, 0.f, 0.f, 0.f);
-    const __m256 low_threshold =
-        _mm256_permutevar8x32_ps(stage_thresholds, group);
-    const __m256 low = _mm256_cmp_ps(value, low_threshold, _CMP_GE_OQ);
-    index = _mm256_or_si256(
-        index, _mm256_and_si256(_mm256_castps_si256(low),
-                                _mm256_set1_epi32(1)));
-  } else {
-    const __m256 high =
-        _mm256_cmp_ps(value, _mm256_set1_ps(thresholds[7]), _CMP_GE_OQ);
-    index = _mm256_and_si256(_mm256_castps_si256(high),
-                             _mm256_set1_epi32(8));
-
-    const __m256 stage =
-        _mm256_blendv_ps(_mm256_set1_ps(thresholds[3]),
-                         _mm256_set1_ps(thresholds[11]), high);
-    const __m256 middle = _mm256_cmp_ps(value, stage, _CMP_GE_OQ);
-    index = _mm256_or_si256(
-        index, _mm256_and_si256(_mm256_castps_si256(middle),
-                                _mm256_set1_epi32(4)));
-
-    const __m256i group = _mm256_srli_epi32(index, 2);
-    const __m256 stage_thresholds =
-        _mm256_setr_ps(thresholds[1], thresholds[5], thresholds[9],
-                       thresholds[13], 0.f, 0.f, 0.f, 0.f);
-    const __m256 low_threshold =
-        _mm256_permutevar8x32_ps(stage_thresholds, group);
-    const __m256 low = _mm256_cmp_ps(value, low_threshold, _CMP_GE_OQ);
-    index = _mm256_or_si256(
-        index, _mm256_and_si256(_mm256_castps_si256(low),
-                                _mm256_set1_epi32(2)));
-
-    const __m256i compact =
-        _mm256_or_si256(_mm256_srli_epi32(_mm256_and_si256(
-                                        index, _mm256_set1_epi32(4)), 1),
-                        _mm256_and_si256(index, _mm256_set1_epi32(1)));
-    const __m256 final_thresholds =
-        _mm256_setr_ps(thresholds[0], thresholds[1], thresholds[4],
-                       thresholds[5], thresholds[8], thresholds[9],
-                       thresholds[12], thresholds[13]);
-    const __m256 final_threshold =
-        _mm256_permutevar8x32_ps(final_thresholds, compact);
-    const __m256 final_mask =
-        _mm256_cmp_ps(value, final_threshold, _CMP_GE_OQ);
-    index = _mm256_or_si256(
-        index, _mm256_and_si256(_mm256_castps_si256(final_mask),
-                                _mm256_set1_epi32(1)));
+  for (int i = 0; i < threshold_count; ++i) {
+    const __m256 threshold = _mm256_set1_ps(thresholds[i]);
+    const __m256 mask = _mm256_cmp_ps(value, threshold, _CMP_GE_OQ);
+    indices = _mm256_sub_epi32(indices, _mm256_castps_si256(mask));
   }
 
-  const __m256i nan_index =
-      (bits == 2) ? _mm256_set1_epi32(1)
-                  : (bits == 3) ? _mm256_set1_epi32(3)
-                                : _mm256_set1_epi32(7);
-  const __m256i nan_bits = _mm256_castps_si256(nan_mask);
-  index = _mm256_or_si256(
-      _mm256_andnot_si256(nan_bits, index),
-      _mm256_and_si256(nan_bits, nan_index));
-  (void)zero;
-  return index;
+  const __m256 nan_mask = _mm256_cmp_ps(value, value, _CMP_UNORD_Q);
+  const __m256i nan_indices =
+      bits == 2 ? _mm256_set1_epi32(1)
+                : bits == 3 ? _mm256_set1_epi32(3)
+                             : _mm256_set1_epi32(7);
+
+  return _mm256_or_si256(
+      _mm256_andnot_si256(_mm256_castps_si256(nan_mask), indices),
+      _mm256_and_si256(_mm256_castps_si256(nan_mask), nan_indices));
 }
 
-__attribute__((target("avx2")))
 static bool quantize_core_avx2(const float *x, int dim, int padded,
                                const int8_t *D_vec, int bits,
                                uint8_t *idx_out, float *buf,
@@ -139,8 +68,6 @@ static bool quantize_core_avx2(const float *x, int dim, int padded,
   for (; i + 15 < dim; i += 16) {
     const __m256 x0 = _mm256_loadu_ps(x + i);
     const __m256 x1 = _mm256_loadu_ps(x + i + 8);
-    buf[i] = 0.f;
-    buf[i + 1] = 0.f;
     norm_acc0 = _mm256_add_ps(norm_acc0, _mm256_mul_ps(x0, x0));
     norm_acc1 = _mm256_add_ps(norm_acc1, _mm256_mul_ps(x1, x1));
     _mm256_storeu_ps(buf + i, x0);
@@ -148,8 +75,7 @@ static bool quantize_core_avx2(const float *x, int dim, int padded,
   }
   for (; i + 7 < dim; i += 8) {
     const __m256 value = _mm256_loadu_ps(x + i);
-    norm_acc0 = _mm256_add_ps(norm_acc0,
-                              _mm256_mul_ps(value, value));
+    norm_acc0 = _mm256_add_ps(norm_acc0, _mm256_mul_ps(value, value));
     _mm256_storeu_ps(buf + i, value);
   }
 
@@ -166,33 +92,37 @@ static bool quantize_core_avx2(const float *x, int dim, int padded,
     return false;
 
   const float inv_norm = 1.f / norm;
-  const __m256 inv_norm_v = _mm256_set1_ps(inv_norm);
-  for (i = 0; i + 7 < padded; i += 8)
-    _mm256_storeu_ps(buf + i,
-                     _mm256_mul_ps(_mm256_loadu_ps(buf + i), inv_norm_v));
+  const __m256 inv_norm_vec = _mm256_set1_ps(inv_norm);
+  for (i = 0; i + 7 < padded; i += 8) {
+    _mm256_storeu_ps(
+        buf + i, _mm256_mul_ps(_mm256_loadu_ps(buf + i), inv_norm_vec));
+  }
   for (; i < padded; ++i)
     buf[i] *= inv_norm;
 
   fwht_forward(buf, D_vec, padded);
 
-  const float sp = sqrtf((float)padded);
-  const __m256 sp_v = _mm256_set1_ps(sp);
+  const float stddev_scale = sqrtf((float)padded);
+  const __m256 scale_vec = _mm256_set1_ps(stddev_scale);
   __m256 sum_acc0 = _mm256_setzero_ps();
   __m256 sum_acc1 = _mm256_setzero_ps();
   i = 0;
   for (; i + 15 < padded; i += 16) {
-    const __m256 v0 = _mm256_mul_ps(_mm256_loadu_ps(buf + i), sp_v);
-    const __m256 v1 = _mm256_mul_ps(_mm256_loadu_ps(buf + i + 8), sp_v);
+    const __m256 v0 = _mm256_mul_ps(_mm256_loadu_ps(buf + i), scale_vec);
+    const __m256 v1 =
+        _mm256_mul_ps(_mm256_loadu_ps(buf + i + 8), scale_vec);
     sum_acc0 = _mm256_add_ps(sum_acc0, _mm256_mul_ps(v0, v0));
     sum_acc1 = _mm256_add_ps(sum_acc1, _mm256_mul_ps(v1, v1));
   }
   for (; i + 7 < padded; i += 8) {
-    const __m256 v = _mm256_mul_ps(_mm256_loadu_ps(buf + i), sp_v);
+    const __m256 v =
+        _mm256_mul_ps(_mm256_loadu_ps(buf + i), scale_vec);
     sum_acc0 = _mm256_add_ps(sum_acc0, _mm256_mul_ps(v, v));
   }
+
   float sum2 = hsum8_quantize(_mm256_add_ps(sum_acc0, sum_acc1));
   for (; i < padded; ++i) {
-    const float v = buf[i] * sp;
+    const float v = buf[i] * stddev_scale;
     sum2 += v * v;
   }
 
@@ -208,38 +138,39 @@ static bool quantize_core_avx2(const float *x, int dim, int padded,
   for (int t = 0; t < threshold_count; ++t)
     thresholds[t] = 0.5f * (cb[t] + cb[t + 1]);
 
-  uint32_t packed_indices[8];
   i = 0;
+  const __m256 clip_vec = _mm256_set1_ps(clip);
+  const __m256 neg_clip_vec = _mm256_set1_ps(-clip);
+  const __m256 inv_clip_vec = _mm256_set1_ps(inv_clip);
   for (; i + 7 < padded; i += 8) {
-    const __m256 original = _mm256_loadu_ps(buf + i);
-    const __m256 nan_mask =
-        _mm256_cmp_ps(original, original, _CMP_UNORD_Q);
-    __m256 value = _mm256_mul_ps(original, sp_v);
-    value = _mm256_min_ps(value, _mm256_set1_ps(clip));
-    value = _mm256_max_ps(value, _mm256_set1_ps(-clip));
-    value = _mm256_blendv_ps(value, original, nan_mask);
-    value = _mm256_mul_ps(value, _mm256_set1_ps(inv_clip));
+    __m256 value =
+        _mm256_mul_ps(_mm256_loadu_ps(buf + i), scale_vec);
+    value = _mm256_min_ps(value, clip_vec);
+    value = _mm256_max_ps(value, neg_clip_vec);
+    value = _mm256_mul_ps(value, inv_clip_vec);
 
-    const __m256i indices =
-        quantize8_avx2(value, thresholds, bits);
-    _mm256_storeu_si256(reinterpret_cast<__m256i *>(packed_indices),
-                        indices);
+    const __m256i indices = quantize8_avx2(value, thresholds, bits);
+    alignas(32) uint32_t lanes[8];
+    _mm256_store_si256(reinterpret_cast<__m256i *>(lanes), indices);
     for (int lane = 0; lane < 8; ++lane)
-      idx_out[i + lane] = (uint8_t)packed_indices[lane];
+      idx_out[i + lane] = (uint8_t)lanes[lane];
   }
+
   for (; i < padded; ++i) {
-    float value = buf[i] * sp;
+    float value = buf[i] * stddev_scale;
     if (value > clip)
       value = clip;
     if (value < -clip)
       value = -clip;
-    buf[i] = value * inv_clip;
-    idx_out[i] = (uint8_t)quantize_fast(buf[i], bits);
+    value *= inv_clip;
+    idx_out[i] = (uint8_t)quantize_fast(value, bits);
   }
 
   *scale_out = norm * clip;
   return true;
 }
+
+#pragma GCC pop_options
 #endif
 
 void Quantizer::init(int d, uint64_t seed) {
