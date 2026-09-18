@@ -590,6 +590,7 @@ static void compute_avx2(const float *qr, float *acc, const float *cb,
 int AttentionHead::compute(const float *q, float *out) const {
   const int n = kv_buf.size, cap = kv_buf.capacity, pb = kv_buf.packed_bytes;
   if (!n) {
+    tl_ws.trim_excess(0, padded);
     memset(out, 0, dim * sizeof(float));
     return 0;
   }
@@ -601,6 +602,7 @@ int AttentionHead::compute(const float *q, float *out) const {
   if (hybrid_thresh > 0 && n <= hybrid_thresh &&
       (int)raw_kv.size() == n * 2 * dim) {
     tl_ws.ensure_capacity(n, padded);
+    WorkspaceTrimGuard trim_guard{tl_ws, n, padded};
     float *logits = tl_ws.logits.data();
     const float scale = 1.f / sqrtf((float)dim);
     float mx = -1e30f;
