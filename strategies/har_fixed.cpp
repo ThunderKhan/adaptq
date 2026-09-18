@@ -243,7 +243,7 @@ public:
             tl_ws.k_results.resize(n);
             for (int i = 0; i < n; ++i)
                 tl_ws.k_results[i] = ctx.storage->read((StorageSlot)slots[i]);
-            ctx.kernel->kdot_batch(qr, k_results.data(), n, padded, bits, logits);
+            ctx.kernel->kdot_batch(qr, tl_ws.k_results.data(), n, padded, bits, logits);
             for (int i = 0; i < n; ++i) {
                 logits[i] *= attn_scale;
                 if (logits[i] > mx) mx = logits[i];
