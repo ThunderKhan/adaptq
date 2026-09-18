@@ -99,7 +99,9 @@ jobs:
       - name: Install AdapTQ
         run: |
           pip install -e .
-          pip install numpy torch
+          pip install numpy torch pytest
 
       - name: Run Python validation suite
-        run: python tests/run_tests.py --stage 2
+        run: |
+          python tests/run_tests.py --stage 2
+          pytest tests/test_replay_api.py -v

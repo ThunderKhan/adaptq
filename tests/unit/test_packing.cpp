@@ -113,3 +113,17 @@ TEST_CASE("Quantizer quantize/dequantize MSE within expected bounds", "[quantize
         if (bits == 2) REQUIRE(mse_val < 1.50);
     }
 }
+
+TEST_CASE("Quantizer init and pack_indices parameter validation", "[quantizer][safety]") {
+    Quantizer q;
+    REQUIRE_THROWS_AS(q.init(0, 42), std::invalid_argument);
+    REQUIRE_THROWS_AS(q.init(-64, 42), std::invalid_argument);
+    REQUIRE_THROWS_AS(q.init(1025, 42), std::invalid_argument);
+
+    uint8_t in_buf[16] = {};
+    uint8_t out_buf[16] = {};
+    REQUIRE_THROWS_AS(pack_indices(in_buf, 16, 1, out_buf), std::invalid_argument);
+    REQUIRE_THROWS_AS(pack_indices(in_buf, 16, 5, out_buf), std::invalid_argument);
+    REQUIRE_THROWS_AS(unpack_indices(in_buf, 16, 1, out_buf), std::invalid_argument);
+    REQUIRE_THROWS_AS(unpack_indices(in_buf, 16, 6, out_buf), std::invalid_argument);
+}

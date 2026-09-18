@@ -12,8 +12,20 @@
 #  define ADAPTQ_PREFETCH(ptr) __builtin_prefetch((ptr), 0, 1)
 #endif
 
-#ifdef __AVX2__
+#if (defined(__GNUC__) || defined(__clang__)) && \
+    (defined(__x86_64__) || defined(__i386__))
+#pragma GCC push_options
+#pragma GCC target("avx2,fma")
+#define ADAPTQ_HAS_AVX2 1
 #include <immintrin.h>
+#elif defined(_MSC_VER) && defined(__AVX2__)
+#define ADAPTQ_HAS_AVX2 1
+#include <immintrin.h>
+#else
+#define ADAPTQ_HAS_AVX2 0
+#endif
+
+#if ADAPTQ_HAS_AVX2
 
 // Permutevar 4-bit lookup: 8 indices in ~8 cycles vs ~40 for gather
 static inline __m256 lup8(const __m256i idx, const __m256 cl, const __m256 ch) {
@@ -167,21 +179,51 @@ static void vaccum1(float *__restrict acc, const uint8_t *__restrict vp,
   }
 }
 
-#endif // __AVX2__
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC pop_options
+#endif
 
-// ---------------------------------------------------------------------------
-static thread_local float tl_logits[65536];
-static thread_local float tl_q_rot[1024];
-static thread_local float tl_v_accum[1024];
-static thread_local int tl_slots[65536];
+#endif // ADAPTQ_HAS_AVX2
+
+#include <vector>
+
+struct AttentionWorkspace {
+  std::vector<float> logits;
+  std::vector<int> slots;
+  std::vector<int> ord;
+  std::vector<float> q_rot;
+  std::vector<float> v_accum;
+
+  void ensure_capacity(int n, int padded) {
+    if (logits.size() < (size_t)n) {
+      logits.resize(n);
+      slots.resize(n);
+      ord.resize(n);
+    }
+    if (q_rot.size() < (size_t)padded) {
+      q_rot.resize(padded);
+      v_accum.resize(padded);
+    }
+  }
+};
+
+static thread_local AttentionWorkspace tl_ws;
 
 float dot_product(const float *a, const float *b, int n) {
+  if (!a || !b || n <= 0)
+    return 0.f;
   float s = 0.f;
   for (int i = 0; i < n; ++i)
     s += a[i] * b[i];
   return s;
 }
 void softmax(float *x, int n) {
+  if (!x || n <= 0)
+    return;
+  if (n == 1) {
+    x[0] = 1.0f;
+    return;
+  }
   float mx = x[0];
   for (int i = 1; i < n; ++i)
     if (x[i] > mx)
@@ -191,9 +233,15 @@ void softmax(float *x, int n) {
     x[i] = expf(x[i] - mx);
     s += x[i];
   }
-  float inv = 1.f / s;
-  for (int i = 0; i < n; ++i)
-    x[i] *= inv;
+  if (s > 0.f && std::isfinite(s)) {
+    float inv = 1.f / s;
+    for (int i = 0; i < n; ++i)
+      x[i] *= inv;
+  } else {
+    float unif = 1.f / (float)n;
+    for (int i = 0; i < n; ++i)
+      x[i] = unif;
+  }
 }
 
 [[maybe_unused]]
@@ -282,6 +330,7 @@ void AttentionHead::init(int d, int b, int cap, uint64_t seed, float v_mass,
   quant.init(d, seed);
   padded = quant.padded;
   kv_buf.init(cap, padded, b);
+  raw_kv.clear();
   if (hyb > 0)
     raw_kv.reserve((size_t)hyb * 2 * d);
 }
@@ -289,15 +338,25 @@ void AttentionHead::append_kv(const float *key, const float *val, int pos) {
   static thread_local uint8_t tmp_k[8192], tmp_v[8192];
   float ks = quant.quantize_into(key, bits, tmp_k);
   float vs = quant.quantize_into(val, bits, tmp_v);
+  bool will_evict = (kv_buf.size >= kv_buf.capacity);
   kv_buf.insert(tmp_k, ks, tmp_v, vs, pos);
-  // Mirror raw floats for hybrid FP path (only up to threshold)
-  if (hybrid_thresh > 0 && (int)raw_kv.size() < hybrid_thresh * 2 * dim) {
-    raw_kv.insert(raw_kv.end(), key, key + dim);
-    raw_kv.insert(raw_kv.end(), val, val + dim);
+  // Mirror raw floats for hybrid FP path (only up to threshold, before circular eviction)
+  if (hybrid_thresh > 0) {
+    if (!will_evict && (int)raw_kv.size() < hybrid_thresh * 2 * dim) {
+      raw_kv.insert(raw_kv.end(), key, key + dim);
+      raw_kv.insert(raw_kv.end(), val, val + dim);
+    } else if (will_evict && !raw_kv.empty()) {
+      // Invalidate raw_kv once circular FIFO eviction occurs to prevent serving stale tokens
+      raw_kv.clear();
+    }
   }
 }
 
-#ifdef __AVX2__
+#if ADAPTQ_HAS_AVX2
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC push_options
+#pragma GCC target("avx2,fma")
+#endif
 template <int BITS>
 static void compute_avx2(const float *qr, float *acc, const float *cb,
                          const uint8_t *kb, const uint8_t *vb,
@@ -374,7 +433,7 @@ static void compute_avx2(const float *qr, float *acc, const float *cb,
                     ch, padded);
     }
   } else {
-    static thread_local int ord[65536];
+    int *ord = tl_ws.ord.data();
     for (int ii = 0; ii < n; ++ii)
       ord[ii] = ii;
     std::sort(ord, ord + n,
@@ -400,6 +459,9 @@ static void compute_avx2(const float *qr, float *acc, const float *cb,
     }
   }
 }
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC pop_options
+#endif
 #endif
 
 int AttentionHead::compute(const float *q, float *out) const {
@@ -415,6 +477,8 @@ int AttentionHead::compute(const float *q, float *out) const {
   // hybrid_thresh tokens. Zero-overhead check: one integer compare.
   if (hybrid_thresh > 0 && n <= hybrid_thresh &&
       (int)raw_kv.size() == n * 2 * dim) {
+    tl_ws.ensure_capacity(n, padded);
+    float *logits = tl_ws.logits.data();
     const float scale = 1.f / sqrtf((float)dim);
     float mx = -1e30f;
     // Compute all logits in one pass, track max
@@ -423,21 +487,21 @@ int AttentionHead::compute(const float *q, float *out) const {
       float d = 0.f;
       for (int j = 0; j < dim; ++j)
         d += q[j] * k[j];
-      tl_logits[i] = d * scale;
-      if (tl_logits[i] > mx)
-        mx = tl_logits[i];
+      logits[i] = d * scale;
+      if (logits[i] > mx)
+        mx = logits[i];
     }
     // Softmax: 2 passes (max known)
     float sv = 0.f;
     for (int i = 0; i < n; ++i) {
-      tl_logits[i] = expf(tl_logits[i] - mx);
-      sv += tl_logits[i];
+      logits[i] = expf(logits[i] - mx);
+      sv += logits[i];
     }
-    float inv = 1.f / sv;
+    float inv = (sv > 0.f && std::isfinite(sv)) ? (1.f / sv) : (1.f / (float)n);
     // Weighted V accumulation
     memset(out, 0, dim * sizeof(float));
     for (int i = 0; i < n; ++i) {
-      float w = tl_logits[i] * inv;
+      float w = logits[i] * inv;
       const float *v = raw_kv.data() + (size_t)i * 2 * dim + dim;
       for (int j = 0; j < dim; ++j)
         out[j] += w * v[j];
@@ -446,8 +510,10 @@ int AttentionHead::compute(const float *q, float *out) const {
   }
   // ---- End hybrid path ---------------------------------------------------
 
+  tl_ws.ensure_capacity(n, padded);
+
   // Rotate query
-  float *qr = tl_q_rot;
+  float *qr = tl_ws.q_rot.data();
   memcpy(qr, q, dim * sizeof(float));
   for (int i = dim; i < padded; ++i)
     qr[i] = 0.f;
@@ -466,20 +532,25 @@ int AttentionHead::compute(const float *q, float *out) const {
     qr[i] *= sp * qn;
 
   const float *cb = get_codebook(bits);
-  float *acc = tl_v_accum;
+  float *acc = tl_ws.v_accum.data();
   const uint8_t *kb = kv_buf.k_data;
   const uint8_t *vb = kv_buf.v_data;
   float attn_s = 1.f / (sqrtf((float)dim) * (float)padded);
   float isp = 1.f / sqrtf((float)padded);
-  float *logits = tl_logits;
-  int *slots = tl_slots;
+  float *logits = tl_ws.logits.data();
+  int *slots = tl_ws.slots.data();
   for (int i = 0; i < n; ++i)
     slots[i] = (kv_buf.head - n + cap + i) % cap;
 
 
 
   // inside compute():
-#ifdef __AVX2__
+#if ADAPTQ_HAS_AVX2
+  bool use_avx2 = true;
+#if defined(__GNUC__) || defined(__clang__)
+  use_avx2 = __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
+#endif
+  if (use_avx2) {
   if (bits == 4) {
     compute_avx2<4>(qr, acc, cb, kb, vb, kv_buf.k_scale.data(),
                     kv_buf.v_scale.data(), attn_s, isp, slots, n, pb, padded,
@@ -502,6 +573,7 @@ int AttentionHead::compute(const float *q, float *out) const {
     memcpy(out, acc, dim * sizeof(float));
     return n;
   }
+  }
 #endif
 
   // Scalar 2/3-bit path
@@ -520,7 +592,7 @@ int AttentionHead::compute(const float *q, float *out) const {
   int cb_sz = 1 << bits;
   for (int i = 0; i < n; ++i) {
     int s = slots[i];
-    float ecb[8];
+    float ecb[16];
     float ew = logits[i] * kv_buf.v_scale[s] * isp;
     for (int k = 0; k < cb_sz; ++k)
       ecb[k] = ew * cb[k];

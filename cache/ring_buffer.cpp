@@ -57,12 +57,20 @@ void KVFlatBuffer::init(int cap, int padded, int b) {
   size_t bytes = (capacity * packed_bytes + 63) & ~63;
 #if defined(_MSC_VER)
   k_data = (uint8_t *)_aligned_malloc(bytes, 64);
+  if (!k_data)
+    throw std::bad_alloc();
   v_data = (uint8_t *)_aligned_malloc(bytes, 64);
+  if (!v_data) {
+    free_aligned();
+    throw std::bad_alloc();
+  }
 #else
   if (posix_memalign((void **)&k_data, 64, bytes))
     throw std::bad_alloc();
-  if (posix_memalign((void **)&v_data, 64, bytes))
+  if (posix_memalign((void **)&v_data, 64, bytes)) {
+    free_aligned();
     throw std::bad_alloc();
+  }
 #endif
   memset(k_data, 0, bytes);
   memset(v_data, 0, bytes);
@@ -93,6 +101,8 @@ void KVFlatBuffer::free_aligned() {
 
 int KVFlatBuffer::insert(const uint8_t *kp, float ks, const uint8_t *vp,
                          float vs, int pos) {
+  if (capacity <= 0)
+    return -1;
   int idx = head;
   memcpy(k_data + (size_t)idx * packed_bytes, kp, packed_bytes);
   memcpy(v_data + (size_t)idx * packed_bytes, vp, packed_bytes);

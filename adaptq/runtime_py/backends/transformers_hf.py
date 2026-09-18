@@ -205,13 +205,13 @@ class TransformersAdapter(IRuntimeAdapter):
 
             self._tokenizer = AutoTokenizer.from_pretrained(
                 cfg.model_path,
-                trust_remote_code=True,
+                trust_remote_code=cfg.allow_remote_code,
             )
             self._model = AutoModelForCausalLM.from_pretrained(
                 cfg.model_path,
                 dtype=torch.float32,
                 device_map=device,
-                trust_remote_code=True,
+                trust_remote_code=cfg.allow_remote_code,
             )
             self._model.eval()
 
@@ -249,8 +249,11 @@ class TransformersAdapter(IRuntimeAdapter):
         if self._tokenizer is not None:
             return True
         try:
+            allow_remote_code = bool(
+                self._model_cfg and self._model_cfg.allow_remote_code
+            )
             self._tokenizer = AutoTokenizer.from_pretrained(
-                tokenizer_path, trust_remote_code=True
+                tokenizer_path, trust_remote_code=allow_remote_code
             )
             return True
         except Exception as e:

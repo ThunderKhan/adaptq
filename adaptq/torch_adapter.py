@@ -85,15 +85,25 @@ if _TORCH_AVAILABLE and _ENGINE_AVAILABLE:
                     f"got {tuple(q.shape)}."
                 )
 
-            # Move to CPU numpy — AdapTQ backend is pure CPU C++.
-            k_np = k.detach().cpu().numpy()[0]  # (heads, dim)
-            v_np = v.detach().cpu().numpy()[0]
-            q_np = q.detach().cpu().numpy()[0]
+            if k.shape != q.shape:
+                raise ValueError(
+                    f"Expected k shape {tuple(q.shape)}, got {tuple(k.shape)}."
+                )
+
+            if v.shape != q.shape:
+                raise ValueError(
+                    f"Expected v shape {tuple(q.shape)}, got {tuple(v.shape)}."
+                )
+
+            # Move to CPU float32 numpy — AdapTQ backend is pure CPU C++ (float32).
+            k_np = k.detach().float().cpu().numpy()[0]  # (heads, dim)
+            v_np = v.detach().float().cpu().numpy()[0]
+            q_np = q.detach().float().cpu().numpy()[0]
 
             self.engine.append(k_np, v_np)
             out_np = self.engine.compute(q_np)  # (heads, dim)
 
-            return torch.from_numpy(out_np).unsqueeze(0).to(q.device)  # (1, heads, dim)
+            return torch.from_numpy(out_np).unsqueeze(0).to(device=q.device, dtype=q.dtype)  # (1, heads, dim)
 
         def reset_cache(self) -> None:
             """Clear the KV cache. Call between independent sequences."""
@@ -103,8 +113,14 @@ else:
     class AdaptQAttention:  # type: ignore[no-redef]
         """Stub: PyTorch not installed. pip install torch to use AdaptQAttention."""
         def __init__(self, *args, **kwargs):
-            raise ImportError(
-                "AdaptQAttention requires PyTorch.\n"
-                "Install with: pip install torch\n"
-                "or: pip install 'adaptq[torch]'"
-            )
+            if not _TORCH_AVAILABLE:
+                raise ImportError(
+                    "AdaptQAttention requires PyTorch.\n"
+                    "Install with: pip install torch\n"
+                    "or: pip install 'adaptq[torch]'"
+                )
+            if not _ENGINE_AVAILABLE:
+                raise ImportError(
+                    "AdaptQAttention requires the AdapTQ C++ runtime engine.\n"
+                    "Please compile the C++ shared library before using AdaptQAttention."
+                )
