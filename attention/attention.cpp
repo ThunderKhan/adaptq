@@ -1,4 +1,5 @@
 #include "../include/attention.h"
+#include "../include/adaptq/backend_selection.h"
 #include "../include/codebook.h"
 #include "softmax_avx2.h"
 #include <algorithm>
@@ -627,9 +628,10 @@ int AttentionHead::compute(const float *q, float *out) const {
 
   // inside compute():
 #if ADAPTQ_HAS_AVX2
-  bool use_avx2 = true;
+  bool use_avx2 = !adaptq::is_scalar_forced();
 #if defined(__GNUC__) || defined(__clang__)
-  use_avx2 = __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
+  use_avx2 = use_avx2 && __builtin_cpu_supports("avx2") &&
+             __builtin_cpu_supports("fma");
 #endif
   if (use_avx2) {
   if (bits == 4) {
