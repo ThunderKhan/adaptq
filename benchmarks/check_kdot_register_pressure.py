@@ -10,14 +10,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from typing import Optional
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "kernels" / "avx2" / "kdot_avx2.cpp"
-FUNCTION_RE = re.compile(r"kdot4_quad_avx2<([234])>")
-YMM_RE = re.compile(r"\\bymm([0-9]+)\\b")
+FUNCTION_RE = re.compile(r"\bkdot4_quad_avx2<([234])>\b")
+YMM_RE = re.compile(r"\bymm([0-9]+)\b")
 STACK_VECTOR_RE = re.compile(
-    r"\\bvmov[a-z0-9]*\\b[^\\n]*\\(%(?:rsp|rbp)\\)",
+    r"\bvmov[a-z0-9]*\b[^\n]*\(%(?:rsp|rbp)\)",
     re.IGNORECASE,
 )
 
@@ -47,11 +48,12 @@ def demangle(compiler: str, assembly: str) -> str:
     return result.stdout
 
 
-def extract_function(assembly: str, bits: str) -> str | None:
+def extract_function(assembly: str, bits: str) -> Optional[str]:
     lines = assembly.splitlines()
     start = None
     for index, line in enumerate(lines):
-        if FUNCTION_RE.search(line) and FUNCTION_RE.search(line).group(1) == bits:
+        match = FUNCTION_RE.search(line)
+        if match and match.group(1) == bits:
             start = index
             break
     if start is None:
@@ -59,8 +61,8 @@ def extract_function(assembly: str, bits: str) -> str | None:
 
     for index in range(start + 1, len(lines)):
         if ".cfi_endproc" in lines[index] or lines[index].startswith(".size"):
-            return "\\n".join(lines[start : index + 1])
-    return "\\n".join(lines[start:])
+            return "\n".join(lines[start : index + 1])
+    return "\n".join(lines[start:])
 
 
 def main() -> int:
@@ -113,23 +115,36 @@ def main() -> int:
 
             found += 1
             registers = sorted({int(match) for match in YMM_RE.findall(body)})
-            spills = [line.strip() for line in body.splitlines() if STACK_VECTOR_RE.search(line)]
+            spills = [
+                line.strip()
+                for line in body.splitlines()
+                if STACK_VECTOR_RE.search(line)
+            ]
 
             print(f"bits={bits} ymm_registers={len(registers)}")
             if registers:
-                print(f"bits={bits} ymm_names=" + ",".join(f"ymm{reg}" for reg in registers))
+                print(
+                    f"bits={bits} ymm_names="
+                    + ",".join(f"ymm{reg}" for reg in registers)
+                )
             print(f"bits={bits} vector_stack_accesses={len(spills)}")
             if spills:
                 failed = True
                 for line in spills:
                     print(f"bits={bits} spill={line}")
 
-        if found == 0:
-            print("kdot4_quad_avx2 was not emitted by the selected compiler.", file=sys.stderr)
+        if found != 3:
+            print(
+                f"kdot4_quad_avx2 specializations emitted: {found}/3",
+                file=sys.stderr,
+            )
             return 2
 
         if failed:
-            print("register-pressure check failed: vector values spill to the stack", file=sys.stderr)
+            print(
+                "register-pressure check failed: vector values spill to the stack",
+                file=sys.stderr,
+            )
             return 1
 
         print("register-pressure check passed: no vector register spills detected")
