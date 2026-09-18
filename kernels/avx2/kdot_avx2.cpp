@@ -180,16 +180,20 @@ public:
         const float *cb = get_codebook(bits);
         __m256 cl = _mm256_loadu_ps(cb), ch = _mm256_loadu_ps(cb + 8);
         int i = 0;
-        for (; i + 3 < N; i += 4) {
-            float d[4];
+        /* kdot4 reads two 8-float query blocks, so use it only when
+         * the padded dimension is at least 16. */
+        if (padded >= 16) {
+            for (; i + 3 < N; i += 4) {
+                float d[4];
 #define KDOT4(B) kdot4_quad_avx2<B>(q_rot, \
     kr[i].data, kr[i+1].data, kr[i+2].data, kr[i+3].data, cl, ch, padded, d)
             if      (bits==4) KDOT4(4);
             else if (bits==3) KDOT4(3);
             else              KDOT4(2);
 #undef KDOT4
-            for (int k = 0; k < 4; ++k)
-                logits_out[i+k] = d[k] * kr[i+k].scale / (float)padded;
+                for (int k = 0; k < 4; ++k)
+                    logits_out[i+k] = d[k] * kr[i+k].scale / (float)padded;
+            }
         }
         for (; i < N; ++i) {
             float d;
@@ -209,18 +213,22 @@ public:
         __m256 cl = _mm256_loadu_ps(cb), ch = _mm256_loadu_ps(cb + 8);
         memset(acc, 0, (size_t)padded * sizeof(float));
         int i = 0;
-        for (; i + 3 < N; i += 4) {
-            float e0 = weights[i]   * vr[i].scale;
+        /* vaccum4 reads two 8-float accumulator blocks, so use it
+         * only when the padded dimension is at least 16. */
+        if (padded >= 16) {
+            for (; i + 3 < N; i += 4) {
+                float e0 = weights[i]   * vr[i].scale;
             float e1 = weights[i+1] * vr[i+1].scale;
             float e2 = weights[i+2] * vr[i+2].scale;
             float e3 = weights[i+3] * vr[i+3].scale;
 #define VACC4(B) vaccum4_avx2<B>(acc, \
     vr[i].data, vr[i+1].data, vr[i+2].data, vr[i+3].data, \
     e0, e1, e2, e3, cl, ch, padded)
-            if      (bits==4) VACC4(4);
-            else if (bits==3) VACC4(3);
-            else              VACC4(2);
+                if      (bits==4) VACC4(4);
+                else if (bits==3) VACC4(3);
+                else              VACC4(2);
 #undef VACC4
+            }
         }
         for (; i < N; ++i) {
             float ew = weights[i] * vr[i].scale;
