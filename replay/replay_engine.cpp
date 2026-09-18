@@ -3,6 +3,7 @@
 #include "../include/adaptq/strategy.h"
 #include <cassert>
 #include <chrono>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
