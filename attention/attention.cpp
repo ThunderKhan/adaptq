@@ -1,7 +1,6 @@
 #include "../include/attention.h"
 #include "../include/adaptq/attention_avx2.h"
 #include "../include/codebook.h"
-#include "softmax_avx2.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
