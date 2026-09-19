@@ -1,5 +1,6 @@
 #include <adaptq/strategy.h>
 #include <adaptq/context.h>
+#include <adaptq/kernel.h>
 #include <adaptq/storage.h>
 #include <adaptq/config.h>
 #include <adaptq/quality.h>
