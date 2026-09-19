@@ -13,6 +13,7 @@ ext_modules = [
             "core/adaptq_backend_vtable.cpp",
             "cache/ring_buffer.cpp",
             "attention/attention.cpp",
+            "kernels/avx2/attention_avx2.cpp",
             "utils/timer.cpp"
         ],
         include_dirs=["include", pybind11.get_include()],
