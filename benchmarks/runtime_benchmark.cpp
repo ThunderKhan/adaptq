@@ -608,9 +608,14 @@ static void write_selection(std::ostream &out,
         << "      \"backend\": ";
     json_string(out, result.backend);
     out << ",\n"
-        << "      \"selection_latency\": ";
-    write_timing(out, result.timing);
-    out << "\n    }";
+        << "      \"selection_latency\": {\n"
+        << "        \"p50_us\": ";
+    json_number(out, result.timing.p50_us);
+    out << ",\n"
+        << "        \"p95_us\": ";
+    json_number(out, result.timing.p95_us);
+    out << "\n      }\n"
+        << "    }";
 }
 
 static void write_workload(std::ostream &out,
