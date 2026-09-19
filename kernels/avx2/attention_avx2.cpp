@@ -1,5 +1,6 @@
-#include "../../include/codebook.h"
+#include "../../include/adaptq/attention_avx2.h"
 #include "softmax_avx2.h"
+#include "../../include/codebook.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -13,6 +14,7 @@
 #include <immintrin.h>
 #elif defined(_MSC_VER) && defined(__AVX2__)
 #define ADAPTQ_HAS_AVX2 1
+#include <intrin.h>
 #include <immintrin.h>
 #else
 #define ADAPTQ_HAS_AVX2 0
@@ -20,7 +22,6 @@
 
 #if ADAPTQ_HAS_AVX2
 
-#if ADAPTQ_HAS_AVX2
 
 // Permutevar 4-bit lookup: 8 indices in ~8 cycles vs ~40 for gather
 static inline __m256 lup8(const __m256i idx, const __m256 cl, const __m256 ch) {
@@ -181,10 +182,6 @@ static void vaccum1(float *__restrict acc, const uint8_t *__restrict vp,
 
 
 
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC push_options
-#pragma GCC target("avx2,fma")
-#endif
 /* Fast AVX2 exp approximation adapted from the standard minimax/cephes form. */
 static inline __m256 exp8_avx2(__m256 x) {
   const __m256 one = _mm256_set1_ps(1.0f);
@@ -267,58 +264,8 @@ void softmax_avx2(float *x, int n) {
       x[i] = uniform;
   }
 }
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC pop_options
-#endif
-#else
-void softmax_avx2(float *x, int n) {
-  softmax(x, n);
-}
-#endif
 
 
-
-
-
-#if defined(_MSC_VER)
-__declspec(noinline) static bool host_supports_avx2_fma() {
-    int regs[4] = {};
-    __cpuid(regs, 0);
-    if (regs[0] < 1)
-        return false;
-
-    __cpuidex(regs, 1, 0);
-    const bool osxsave = (regs[2] & (1 << 27)) != 0;
-    const bool avx = (regs[2] & (1 << 28)) != 0;
-    const bool fma = (regs[2] & (1 << 12)) != 0;
-    if (!osxsave || !avx || !fma)
-        return false;
-
-    const unsigned __int64 xcr0 = _xgetbv(0);
-    if ((xcr0 & 0x6ULL) != 0x6ULL)
-        return false;
-
-    __cpuidex(regs, 0, 0);
-    if (regs[0] < 7)
-        return false;
-
-    __cpuidex(regs, 7, 0);
-    return (regs[1] & (1 << 5)) != 0;
-}
-#elif defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline)) static bool host_supports_avx2_fma() {
-    return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
-}
-#else
-static bool host_supports_avx2_fma() {
-    return false;
-}
-#endif
-
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC push_options
-#pragma GCC target("avx2,fma")
-#endif
 template <int BITS>
 static void compute_avx2(const float *qr, float *acc, const float *cb,
                          const uint8_t *kb, const uint8_t *vb,
@@ -402,58 +349,88 @@ static void compute_avx2(const float *qr, float *acc, const float *cb,
     }
   }
 }
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC pop_options
-#endif
-#endif
-
 
 
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC pop_options
 #endif
 
-#endif
+#if defined(_MSC_VER)
+static bool host_supports_avx2_fma() {
+    int regs[4] = {};
+    __cpuid(regs, 0);
+    if (regs[0] < 1)
+        return false;
 
-bool adaptq_attention_avx2_available() {
-#if ADAPTQ_HAS_AVX2
-    return host_supports_avx2_fma();
-#else
-    return false;
-#endif
+    __cpuidex(regs, 1, 0);
+    const bool osxsave = (regs[2] & (1 << 27)) != 0;
+    const bool avx = (regs[2] & (1 << 28)) != 0;
+    const bool fma = (regs[2] & (1 << 12)) != 0;
+    if (!osxsave || !avx || !fma)
+        return false;
+
+    const unsigned __int64 xcr0 = _xgetbv(0);
+    if ((xcr0 & 0x6ULL) != 0x6ULL)
+        return false;
+
+    __cpuidex(regs, 0, 0);
+    if (regs[0] < 7)
+        return false;
+
+    __cpuidex(regs, 7, 0);
+    return (regs[1] & (1 << 5)) != 0;
 }
+#elif defined(__GNUC__) || defined(__clang__)
+static bool host_supports_avx2_fma() {
+    return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
+}
+#else
+static bool host_supports_avx2_fma() {
+    return false;
+}
+#endif
 
-bool adaptq_attention_compute_avx2(
-    const float *qr, float *acc, const float *cb,
-    const uint8_t *kb, const uint8_t *vb,
-    const float *kscale, const float *vscale, float attn_s, float isp,
-    int *slots, int n, int pb, int padded, int bits, float v_mass_thresh,
-    int *ord, float *logits) {
+#endif // ADAPTQ_HAS_AVX2
+
+bool adaptq_attention_avx2_compute(
+    const float *q_rot, float *acc, const float *codebook,
+    const uint8_t *k_data, const uint8_t *v_data,
+    const float *k_scale, const float *v_scale,
+    float attention_scale, float inverse_sqrt_padded,
+    int *slots, int token_count, int packed_bytes, int padded, int bits,
+    float value_mass_threshold, int *order, float *logits) {
 #if ADAPTQ_HAS_AVX2
     if (!host_supports_avx2_fma())
         return false;
 
     switch (bits) {
     case 4:
-        compute_avx2<4>(qr, acc, cb, kb, vb, kscale, vscale, attn_s, isp,
-                        slots, n, pb, padded, v_mass_thresh, ord, logits);
+        compute_avx2<4>(q_rot, acc, codebook, k_data, v_data, k_scale, v_scale,
+                        attention_scale, inverse_sqrt_padded, slots,
+                        token_count, packed_bytes, padded, value_mass_threshold,
+                        order, logits);
         return true;
     case 3:
-        compute_avx2<3>(qr, acc, cb, kb, vb, kscale, vscale, attn_s, isp,
-                        slots, n, pb, padded, v_mass_thresh, ord, logits);
+        compute_avx2<3>(q_rot, acc, codebook, k_data, v_data, k_scale, v_scale,
+                        attention_scale, inverse_sqrt_padded, slots,
+                        token_count, packed_bytes, padded, value_mass_threshold,
+                        order, logits);
         return true;
     case 2:
-        compute_avx2<2>(qr, acc, cb, kb, vb, kscale, vscale, attn_s, isp,
-                        slots, n, pb, padded, v_mass_thresh, ord, logits);
+        compute_avx2<2>(q_rot, acc, codebook, k_data, v_data, k_scale, v_scale,
+                        attention_scale, inverse_sqrt_padded, slots,
+                        token_count, packed_bytes, padded, value_mass_threshold,
+                        order, logits);
         return true;
     default:
         return false;
     }
 #else
-    (void)qr; (void)acc; (void)cb; (void)kb; (void)vb;
-    (void)kscale; (void)vscale; (void)attn_s; (void)isp;
-    (void)slots; (void)n; (void)pb; (void)padded; (void)bits;
-    (void)v_mass_thresh; (void)ord; (void)logits;
+    (void)q_rot; (void)acc; (void)codebook; (void)k_data; (void)v_data;
+    (void)k_scale; (void)v_scale; (void)attention_scale;
+    (void)inverse_sqrt_padded; (void)slots; (void)token_count;
+    (void)packed_bytes; (void)padded; (void)bits;
+    (void)value_mass_threshold; (void)order; (void)logits;
     return false;
 #endif
 }
