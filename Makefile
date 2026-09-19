@@ -12,6 +12,7 @@ SRCS := \
     core/adaptq_backend_vtable.cpp \
     cache/ring_buffer.cpp \
     attention/attention.cpp \
+    kernels/avx2/attention_avx2.cpp \
     utils/timer.cpp \
     main.cpp
 
@@ -23,6 +24,7 @@ SRCS_LIB := \
     core/adaptq_backend_vtable.cpp \
     cache/ring_buffer.cpp \
     attention/attention.cpp \
+    kernels/avx2/attention_avx2.cpp \
     utils/timer.cpp
 
 OBJS     := $(SRCS:.cpp=.o)
