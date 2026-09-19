@@ -165,6 +165,7 @@ target_include_directories(adapTQ_demo PRIVATE
 add_executable(adapTQ_runtime_bench benchmarks/runtime_benchmark.cpp)
 target_link_libraries(adapTQ_runtime_bench PRIVATE adapTQ_runtime adapTQ_core)
 target_include_directories(adapTQ_runtime_bench PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/runtime
     ${CMAKE_CURRENT_SOURCE_DIR}/storage
