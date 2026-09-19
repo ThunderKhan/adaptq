@@ -1,10 +1,15 @@
 #include "../../include/adaptq/attention_avx2.h"
-#include "softmax_avx2.h"
 #include "../../include/codebook.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+
+#if defined(_MSC_VER)
+#  define ADAPTQ_PREFETCH(ptr) _mm_prefetch(reinterpret_cast<const char*>(ptr), _MM_HINT_T1)
+#else
+#  define ADAPTQ_PREFETCH(ptr) __builtin_prefetch((ptr), 0, 1)
+#endif
 
 #if (defined(__GNUC__) || defined(__clang__)) && \
     (defined(__x86_64__) || defined(__i386__))
