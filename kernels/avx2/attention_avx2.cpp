@@ -185,7 +185,10 @@ static void vaccum1(float *__restrict acc, const uint8_t *__restrict vp,
 #pragma GCC pop_options
 #endif
 
-
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC push_options
+#pragma GCC target("avx2,fma")
+#endif
 
 /* Fast AVX2 exp approximation adapted from the standard minimax/cephes form. */
 static inline __m256 exp8_avx2(__m256 x) {
