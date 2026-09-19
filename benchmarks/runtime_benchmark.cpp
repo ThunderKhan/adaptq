@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -789,7 +790,16 @@ int main(int argc, char **argv) {
         }
 
         if (!options.output_path.empty()) {
-            std::ofstream file(options.output_path);
+            const std::filesystem::path output_path(options.output_path);
+            if (output_path.has_parent_path()) {
+                std::error_code ec;
+                std::filesystem::create_directories(
+                    output_path.parent_path(), ec);
+                if (ec)
+                    fail("failed to create output directory: " + ec.message());
+            }
+
+            std::ofstream file(output_path);
             if (!file)
                 fail("failed to open output path: " + options.output_path);
 
