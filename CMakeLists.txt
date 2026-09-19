@@ -71,8 +71,8 @@ target_include_directories(adapTQ_avx2_obj PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels
 )
-# -mavx2/-mfma are x86-only; on other targets kdot_avx2.cpp compiles its
-# !__AVX2__ branch and the selector falls back to the scalar backend.
+# AVX2 sources compile their portable stubs on targets where AVX2 is unavailable.
+# The MSVC target is isolated so the portable core never requires AVX2 codegen.
 if(MSVC)
   target_compile_options(adapTQ_avx2_obj PRIVATE /arch:AVX2)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86|x86)$")
@@ -212,7 +212,7 @@ if(ADAPTQ_BUILD_TESTS)
   # --- test_api ------------------------------------------------------------
   add_executable(test_api
       tests/unit/test_api.cpp)
-  target_link_libraries(test_api PRIVATE adapTQ_core Catch2::Catch2WithMain)
+  target_link_libraries(test_api PRIVATE adapTQ_core adapTQ_avx2 Catch2::Catch2WithMain)
   catch_discover_tests(test_api)
 
   # --- test_avx2_softmax ---------------------------------------------------
