@@ -63,7 +63,10 @@ endif()
 # ---------------------------------------------------------------------------
 # AVX2 kernel backend
 # ---------------------------------------------------------------------------
-add_library(adapTQ_avx2_obj OBJECT kernels/avx2/kdot_avx2.cpp)
+add_library(adapTQ_avx2_obj OBJECT
+    kernels/avx2/kdot_avx2.cpp
+    kernels/avx2/attention_avx2.cpp
+)
 target_include_directories(adapTQ_avx2_obj PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels
